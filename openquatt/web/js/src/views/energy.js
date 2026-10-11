@@ -996,7 +996,7 @@ import { renderStatCard } from "./stat-card.js";
             class="oq-energy-history-period-button"
             data-oq-action="shift-energy-history-period"
             data-energy-history-direction="1"
-            ${periodModel.canNext ? "disabled" : ""}
+            ${periodModel.canNext ? "" : "disabled"}
           >${escapeHtml(t("energy.periodNext"))}</button>
         </div>
       </div>
