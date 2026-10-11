@@ -7,13 +7,45 @@ globalThis.localStorage = { getItem: () => null };
 const { state } = await import("../js/src/core/state.js");
 const {
   getEnergyHistoryBucketTooltip,
+  getEnergyHistoryPeriodControlModel,
   getEnergyHistoryRecords,
   getEnergyHistoryRenderSignature,
   getEnergyHistorySummaryRecords,
   renderOverviewEnergyColumn,
+  renderEnergyHistoryPeriodControl,
 } = await import("../js/src/views/energy.js");
+const { getLocale, setLocale } = await import("../js/src/i18n/index.js");
 const { OVERVIEW_ENERGY_COLUMN_CONFIGS } = await import("../js/src/core/config.js");
 const { getEnergyViewEntityKeys } = await import("../js/src/core/entity-sync.js");
+
+test("next period is disabled at the latest period and enabled for earlier periods", () => {
+  const previousSelection = state.energyHistoryPeriodSelection;
+  const previousLocale = getLocale();
+  const records = [{ dateKey: 20240101 }, { dateKey: 20261011 }];
+
+  try {
+    for (const locale of ["nl", "en"]) {
+      setLocale(locale, { persist: false, notify: false });
+      for (const view of ["day", "week", "month", "year"]) {
+        state.energyHistoryPeriodSelection = {};
+        const latest = getEnergyHistoryPeriodControlModel(records, view);
+        const selections = [latest.maxValue, latest.minValue, latest.maxValue];
+        for (const selectedValue of selections) {
+          state.energyHistoryPeriodSelection = { [view]: selectedValue };
+          const model = getEnergyHistoryPeriodControlModel(records, view);
+          const markup = renderEnergyHistoryPeriodControl(model);
+          const nextButton = markup.match(/<button\b[^>]*data-energy-history-direction="1"[^>]*>/)?.[0];
+          assert.ok(nextButton, `${locale}/${view}: next button exists`);
+          assert.equal(/\bdisabled\b/.test(nextButton), selectedValue === latest.maxValue,
+            `${locale}/${view}/${selectedValue}: next button state`);
+        }
+      }
+    }
+  } finally {
+    state.energyHistoryPeriodSelection = previousSelection;
+    setLocale(previousLocale, { persist: false, notify: false });
+  }
+});
 
 test("Cumulatief bevat de energieteller-reset en hydrateert de knop", () => {
   const previousEntities = state.entities;
