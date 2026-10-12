@@ -52,7 +52,8 @@ class ThermalActuatorRuntimeContractTest(unittest.TestCase):
                  "scripts/tests/test_thermal_actuator_runtime_contract.py", "scripts/tests/test_v2_compressor_level_contract.py",
                  "scripts/tests/test_compressor_frequency_policy_contract.py")
         # Includes restart credit, frequency diagnosis, start quota and the defrost actuator adapter.
-        self.assertLessEqual(sum(len((ROOT / path).read_text().splitlines()) for path in paths), 1700)
+        # Physical stand limits and the bounded-continuation policy guard.
+        self.assertLessEqual(sum(len((ROOT / path).read_text().splitlines()) for path in paths), 1705)
 
     def test_start_quota_covers_retained_writes_and_final_transitions(self) -> None:
         actuator = RUNTIME[RUNTIME.index("int apply_level_"):RUNTIME.index("int previous_applied_")]

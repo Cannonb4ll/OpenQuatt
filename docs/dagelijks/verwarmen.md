@@ -105,6 +105,12 @@ Kies eerder stooklijnregeling als:
 
 Twijfel je? Begin dan met de strategie die het meest logisch voelt, en wissel niet te snel heen en weer. Eerst kijken hoe het systeem zich over langere tijd gedraagt is meestal verstandiger dan direct finetunen.
 
+## Hoe kiest OpenQuatt een compressorstand?
+
+Bij automatisch verwarmen bekijkt OpenQuatt de frequenties uit de ingelezen standentabel van iedere warmtepomp. Het performancemodel schat bij die frequenties en de buiten- en watertemperatuur hoeveel warmte de unit levert. De regeling kiest daaruit een passende stand; bij `Duo` beoordeelt zij de combinatie van beide units binnen de bestaande inschakel- en wisselvoorwaarden.
+
+Zo kunnen extra standen tussen de bestaande meetpunten worden gebruikt. Automatisch verwarmen blijft voorlopig begrensd op **90 Hz**. Je ingestelde dag-/stiltegrens en uitgesloten frequenties kunnen die keuze verder beperken. Standen zonder geldige tabel of bruikbare performancegegevens zijn geen nieuwe startkandidaten. Bestaande beveiligingen en wachttijden blijven gelden.
+
 ## `Single` en `Duo`
 
 Bij `Single` is er een warmtepomp. Bij `Duo` zijn het er twee.

@@ -48,7 +48,8 @@ class ThermalRequestRuntimeContractTest(unittest.TestCase):
             self.assertIn(marker, LOGIC)
             self.assertIn(marker, HOST_TEST)
         total = sum(len(source.splitlines()) for source in (YAML, LOGIC, RUNTIME, HOST_TEST))
-        self.assertLessEqual(total, 1720)
+        # Explicit per-HP physical table limits replace the model-level bound.
+        self.assertLessEqual(total, 1730)
 
 
 if __name__ == "__main__":
