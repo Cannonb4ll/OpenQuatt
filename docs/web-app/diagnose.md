@@ -31,6 +31,19 @@ Tijdelijke PSRAM-historie is op alle ondersteunde profielen standaard aan en wor
 
 `Beslislog` laat zien welke regelkeuze OpenQuatt maakte en welke signalen daarbij meespeelden. Gebruik dit scherm vooral om een onverwachte omschakeling of begrenzing te verklaren. De functie is nog beta; combineer de uitleg daarom met de actuele waarden in `Diagnose`.
 
+Bij verwarmstops geeft de log de oorspronkelijke reden aan: bijvoorbeeld laaglast,
+een bereikte comfortgrens, een stop boven het waterdoel van de stooklijn, een andere
+bronkeuze of een beveiliging. Een vastgehouden comfortstop verwijst naar de eerdere
+temperatuurbeslissing, ook als de kamer bij de uiteindelijke stop iets is afgekoeld.
+
+Waar beschikbaar staan de basisregelvraag, effectieve regelvraag, laatst gemeten
+warmtepompvermogen vóór de stop en de gebruikte temperatuur- of laaglastgrenzen erbij.
+De herstartvoorwaarden staan in de details. De besliswaarden worden apart bewaard;
+de vermogensmeting is de laatst beschikbare meting vóór de stopopdracht. Ontbrekende
+waarden blijven onbekend. Oudere records krijgen geen achteraf ingevulde meetwaarden.
+Na een stop kan de kamer nog opwarmen door opgeslagen warmte en kan de circulatiepomp
+nalopen. Dat telt niet als een nieuwe compressorstart of extra stop.
+
 
 ## Systeemrecorder voor support
 

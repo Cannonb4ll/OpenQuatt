@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <string>
+#include "esphome/components/openquatt_decision_log/OpenQuattHeatingStop.h"
 
 #include "../performance/hp_perf_frequency.h"
 #include "oq_compressor_frequency_runtime.h"
@@ -25,6 +26,7 @@ struct DispatchConfig {
 class Runtime {
  public:
   void reset_profile() {
+    this->stop_snapshot_ = {};
     this->reset_control_();
     id(oq_curve_oil_return_hold_until_ms) = 0;
     id(oq_curve_supply_external) = false;
@@ -80,6 +82,30 @@ class Runtime {
     const auto demand = oq_curve::decide_demand({now_ms, pid_output, target_c, supply_c, room_c, room_setpoint_c,
                                                  room_data_fresh, oil_return.mask_active, applied_total, demand_max_f},
                                                 tuning, previous);
+    namespace stop = esphome::openquatt_decision_log::heating_stop;
+    stop::Snapshot stop_snapshot;
+    stop_snapshot.captured_ms = now_ms;
+    stop_snapshot.reason = stop::curve_demand_reason(demand.valid, static_cast<uint8_t>(demand.stop_reason));
+    stop_snapshot.room_c = room_data_fresh ? stop::encode(room_c, 100.0f) : stop::UNKNOWN_VALUE;
+    stop_snapshot.room_stop_c = room_data_fresh
+                                    ? stop::encode(room_setpoint_c + (demand.stop_reason == oq_curve::STOP_LOW_LOAD
+                                                                          ? -tuning.room_resume_heat_c
+                                                                          : tuning.room_overheat_off_c),
+                                                   100.0f)
+                                    : stop::UNKNOWN_VALUE;
+    stop_snapshot.room_restart_c =
+        room_data_fresh ? stop::encode(room_setpoint_c - tuning.room_resume_heat_c, 100.0f) : stop::UNKNOWN_VALUE;
+    stop_snapshot.supply_c = stop::encode(supply_c, 100.0f);
+    stop_snapshot.supply_stop_c =
+        demand.valid ? stop::encode(target_c + (demand.stop_reason == oq_curve::STOP_LOW_LOAD
+                                                    ? 0.25f
+                                                    : std::max(tuning.stop_delta_c, tuning.start_delta_c + 0.10f)),
+                                    100.0f)
+                     : stop::UNKNOWN_VALUE;
+    stop_snapshot.supply_restart_c =
+        demand.valid ? stop::encode(target_c - std::max(tuning.restart_delta_c, tuning.start_delta_c + 0.05f), 100.0f)
+                     : stop::UNKNOWN_VALUE;
+    this->stop_snapshot_ = stop::retain_first(this->stop_snapshot_, stop_snapshot, !demand.next.heat_request_active);
     id(oq_curve_oil_return_hold_until_ms) = oil_return.hold_until_ms;
     if (demand.valid)
       this->log_demand_transition_(now_ms, room_c, room_setpoint_c, oil_return.mask_active, tuning, previous, demand);
@@ -139,10 +165,14 @@ class Runtime {
     return effective.supply_target_c;
   }
 
+  const esphome::openquatt_decision_log::heating_stop::Snapshot& stop_snapshot() const { return this->stop_snapshot_; }
+  uint8_t dispatch_stop_reason() const { return this->dispatch_stop_reason_; }
+
   void strategy_tick(int demand_max_f, bool ot_room_temperature_fresh, bool ot_room_setpoint_fresh) {
     const bool active = id(oq_control_mode_code) != 5 && id(oq_heat_mode_code) == 1;
     const uint32_t now_ms = static_cast<uint32_t>(millis());
     if (!active) {
+      this->stop_snapshot_ = {};
       if (id(oq_heating_curve_pid).mode != CLIMATE_MODE_OFF) {
         auto call = id(oq_heating_curve_pid).make_call();
         call.set_mode(CLIMATE_MODE_OFF);
@@ -156,6 +186,10 @@ class Runtime {
     const float supply_c = id(oq_system_supply_temp).state;
     if (!std::isfinite(target_c) || !std::isfinite(supply_c)) {
       this->reset_control_();
+      this->stop_snapshot_ = {};
+      this->stop_snapshot_.captured_ms = now_ms;
+      this->stop_snapshot_.reason = esphome::openquatt_decision_log::REASON_HEATING_INPUT_INVALID;
+      this->stop_snapshot_.supply_c = esphome::openquatt_decision_log::heating_stop::encode(supply_c, 100.0f);
     } else {
       const float current_target_c = id(oq_heating_curve_pid).target_temperature;
       if (id(oq_heating_curve_pid).mode != CLIMATE_MODE_HEAT || !std::isfinite(current_target_c) ||
@@ -237,6 +271,7 @@ class Runtime {
     this->last_hp1_available_ = hp1_available;
     this->last_hp2_available_ = hp2_available;
     if (!urgent && !oq_curve::cadence_due(now_ms, id(oq_curve_request_last_loop_ms), config.loop_ms)) return;
+    this->dispatch_stop_reason_ = esphome::openquatt_decision_log::REASON_HEATING_NO_CANDIDATE;
     id(oq_curve_request_last_loop_ms) = oq_curve::timestamp_ms(now_ms);
 
     constexpr int level_cap = 10;
@@ -413,6 +448,12 @@ class Runtime {
       hp1_level = best_single.valid ? best_single.hp1_level : 0;
       hp2_level = best_single.valid ? best_single.hp2_level : 0;
       id(oq_curve_capacity_mode_code) = best_single.valid && (hp1_level > 0 || hp2_level > 0) ? 1 : 0;
+      const bool regular_single_stop =
+          previous_hp1 > 0 && previous_hp2 > 0 && single_sufficient && dispatch_u <= duo_disable_max_u &&
+          (!std::isfinite(temperature_error_c) || temperature_error_c <= tuning.dual_disable_temp_err_max_c) &&
+          id(oq_dual_hp_disable_hold_elapsed_accum_min) >= dual_off_hold_min;
+      this->dispatch_stop_reason_ =
+          esphome::openquatt_decision_log::heating_stop::curve_single_reason(regular_single_stop, best_duo.valid);
     }
     const bool active_model_missing = (previous_hp1 > 0 && !hp1_candidate.must_stop && !hp1_model_available) ||
                                       (previous_hp2 > 0 && !hp2_candidate.must_stop && !hp2_model_available);
@@ -454,6 +495,8 @@ class Runtime {
   }
 
  private:
+  uint8_t dispatch_stop_reason_{0};
+  esphome::openquatt_decision_log::heating_stop::Snapshot stop_snapshot_;
   static constexpr uint32_t kOilReturnHoldMs = 180000UL;
   oq_curve::ControlProfileTuning tuning_() const {
     return oq_curve::control_profile(

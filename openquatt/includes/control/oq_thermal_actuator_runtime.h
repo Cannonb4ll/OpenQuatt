@@ -13,6 +13,9 @@
 #include "oq_cooling_start_status.h"
 #include "oq_defrost_logic.h"
 #include "oq_incident_actuator_logic.h"
+#include "oq_heating_curve_runtime.h"
+#include "oq_power_house_runtime.h"
+#include "oq_supervisory_state_runtime.h"
 #include "oq_thermal_actuator_logic.h"
 #include "oq_thermal_request_logic.h"
 #include "../odu/oq_odu_compressor_levels.h"
@@ -133,9 +136,9 @@ class Runtime {
                                  cycle.service_guards[0], cycle.service_guards[1], config.now_ms,
                                  config.minimum_flow_lph);
     }
-    this->record_transition(true, hp1_applied, config.now_ms, config.dt_ms);
+    this->record_transition(true, hp1_applied, config.now_ms, config.dt_ms, hp1_was_cooling);
 #if OQ_TOPOLOGY_DUO
-    this->record_transition(false, hp2_applied, config.now_ms, config.dt_ms);
+    this->record_transition(false, hp2_applied, config.now_ms, config.dt_ms, hp2_was_cooling);
 #endif
     this->publish_cooling_start_status_();
   }
@@ -379,7 +382,7 @@ class Runtime {
     this->last_manual_guard_status_ = status;
   }
 
-  void record_transition(bool is_hp1, int new_level, uint32_t now_ms, uint32_t dt_ms) {
+  void record_transition(bool is_hp1, int new_level, uint32_t now_ms, uint32_t dt_ms, bool was_cooling = false) {
     int& previous = is_hp1 ? id(hp1_last_applied_level) : OQ_ACTUATOR_SECONDARY_ID(last_applied_level);
     this->start_limits_[is_hp1 ? 0 : 1].record_transition(previous, new_level, now_ms);
     if (previous != new_level) {
@@ -391,7 +394,7 @@ class Runtime {
       this->emit_transition_(is_hp1, true, new_level);
     } else if (previous > 0 && new_level == 0) {
       this->set_last_stop_ms_(is_hp1, now_ms);
-      this->emit_transition_(is_hp1, false, previous);
+      this->emit_transition_(is_hp1, false, previous, was_cooling);
     }
 
     if (new_level > 0 && dt_ms > 0 && this->measured_thermal_mode_(is_hp1)) {
@@ -956,15 +959,78 @@ class Runtime {
     (is_hp1 ? id(hp1_last_stop_ms) : OQ_ACTUATOR_SECONDARY_ID(last_stop_ms)) = now_ms;
   }
 
-  void emit_transition_(bool is_hp1, bool starting, int level) const {
+  void emit_transition_(bool is_hp1, bool starting, int level, bool was_cooling = false) const {
+    uint8_t reason = this->transition_reason(starting);
+    uint8_t flags = 0;
+    const bool heating = !was_cooling && !oq_manual_hp::owns_control() &&
+                         (id(oq_heat_mode_code) == 1 || id(oq_strategy_output_source_code) == 3);
+    if (!starting && heating) {
+      namespace stop = openquatt_decision_log::heating_stop;
+      const uint32_t now_ms = static_cast<uint32_t>(millis());
+      const bool curve = id(oq_heat_mode_code) == 1;
+      auto snapshot = curve ? oq_heating_curve_runtime::runtime().stop_snapshot()
+                            : oq_power_house_runtime::runtime().stop_snapshot();
+      if (snapshot.reason == 0) {
+        snapshot = {};
+        snapshot.captured_ms = now_ms;
+        snapshot.room_c = stop::encode(id(room_temp_selected).state, 100.0f);
+        snapshot.supply_c = stop::encode(id(oq_system_supply_temp).state, 100.0f);
+        if (!curve) {
+          snapshot.base_w = stop::encode(oq_power_house_runtime::runtime().run_extension_base_w());
+          snapshot.effective_w = stop::encode(id(oq_strategy_requested_power_w));
+        }
+      }
+      auto* defrost = is_hp1 ? &id(hp1_odu_defrost) : &OQ_ACTUATOR_SECONDARY_ID(odu_defrost);
+      const bool source_unavailable =
+          id(oq_incident_manager).get_outputs(is_hp1 ? 1U : 2U).must_stop || defrost->cycle.telemetry_fault(now_ms);
+      const bool water_limit = id(oq_water_temp_hard_trip_active) || id(oq_water_temp_limit_factor) <= 0.0f;
+      const bool disabled =
+          !id(oq_enabled).state || !id(heating_enable_valid).state || !id(heating_enable_selected).state;
+      const uint8_t captured_reason = snapshot.held && snapshot.reason == openquatt_decision_log::REASON_PH_COMFORT_STOP
+                                          ? static_cast<uint8_t>(openquatt_decision_log::REASON_PH_COMFORT_HOLD)
+                                          : snapshot.reason;
+      uint8_t central_reason = oq_supervisory_state_runtime::runtime().heating_gate_reason();
+      const bool central_pause = id(oq_control_mode_code) != 2 && id(oq_control_mode_code) != 3;
+      if (central_reason == 0 && central_pause && id(oq_strategy_heat_request_active) &&
+          !(snapshot.reason != 0 || (!curve && !id(oq_lowload_heat_latch))))
+        central_reason = openquatt_decision_log::REASON_HEATING_CENTRAL_PAUSE;
+      reason = stop::reason_for_stop(
+          {source_unavailable, id(oq_lowflow_fault_active), water_limit, disabled, id(oq_strategy_heat_request_active),
+           curve, !curve && !id(oq_lowload_heat_latch), id(oq_power_cap_f) <= 0 && id(oq_demand_raw) > 0,
+           curve && (is_hp1 ? id(oq_curve_dispatch_hp2_level) : id(oq_curve_dispatch_hp1_level)) > 0, captured_reason,
+           curve ? oq_heating_curve_runtime::runtime().dispatch_stop_reason()
+                 : static_cast<uint8_t>(id(oq_ph_request_reason_code)),
+           central_reason});
+      // A later safety cause supersedes the pending comfort/demand decision.
+      // Its snapshot must not carry the old decision's temperatures or limits.
+      if ((source_unavailable || disabled || id(oq_lowflow_fault_active) || water_limit || central_reason != 0) &&
+          snapshot.reason != reason) {
+        snapshot = {};
+        snapshot.captured_ms = now_ms;
+        snapshot.room_c = stop::encode(id(room_temp_selected).state, 100.0f);
+        snapshot.supply_c = stop::encode(id(oq_system_supply_temp).state, 100.0f);
+      }
+      const uint8_t subject = is_hp1 ? openquatt_decision_log::SUBJECT_HP1 : openquatt_decision_log::SUBJECT_HP2;
+      const auto context = [&](uint8_t kind, int16_t a, int16_t b, int16_t threshold) {
+        id(oq_decision_log)
+            .emit(openquatt_decision_log::EVENT_HEATING_STOP_CONTEXT, subject, reason,
+                  openquatt_decision_log::SEVERITY_NORMAL, static_cast<uint8_t>(id(oq_control_mode_code)),
+                  openquatt_decision_log::STATE_ACTIVE, openquatt_decision_log::STATE_IDLE, a, b, threshold,
+                  stop::age_seconds(now_ms, snapshot.captured_ms), kind);
+      };
+      const float measured_w = is_hp1 ? id(hp1_heat_power).state : OQ_ACTUATOR_SECONDARY_ID(heat_power).state;
+      context(stop::POWER, snapshot.base_w, snapshot.effective_w, stop::encode(measured_w));
+      context(stop::ROOM, snapshot.room_c, snapshot.room_restart_c, snapshot.room_stop_c);
+      context(stop::WATER, snapshot.supply_c, snapshot.supply_restart_c, snapshot.supply_stop_c);
+      flags = openquatt_decision_log::FLAG_RAW_VALUE_VALID;
+    }
     id(oq_decision_log)
         .emit(starting ? openquatt_decision_log::EVENT_SOURCE_START : openquatt_decision_log::EVENT_SOURCE_STOP,
-              is_hp1 ? openquatt_decision_log::SUBJECT_HP1 : openquatt_decision_log::SUBJECT_HP2,
-              this->transition_reason(starting), openquatt_decision_log::SEVERITY_NORMAL,
-              static_cast<uint8_t>(id(oq_control_mode_code)),
+              is_hp1 ? openquatt_decision_log::SUBJECT_HP1 : openquatt_decision_log::SUBJECT_HP2, reason,
+              openquatt_decision_log::SEVERITY_NORMAL, static_cast<uint8_t>(id(oq_control_mode_code)),
               starting ? openquatt_decision_log::STATE_IDLE : openquatt_decision_log::STATE_ACTIVE,
               starting ? openquatt_decision_log::STATE_ACTIVE : openquatt_decision_log::STATE_IDLE,
-              static_cast<int16_t>(level), 0, 0);
+              static_cast<int16_t>(level), 0, 0, 0, flags);
   }
 
   std::string last_optimizer_reason_;
