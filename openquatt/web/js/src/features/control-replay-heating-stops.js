@@ -19,7 +19,7 @@ const reasons = {
   heating_water_limit: ["heatingStops.waterLimit", "heatingStops.waterLimitCopy", "heatingStops.safetyNext"],
   heating_flow_limit: ["heatingStops.flowLimit", "heatingStops.flowLimitCopy", "heatingStops.safetyNext"],
   heating_source_unavailable: ["heatingStops.unavailable", "heatingStops.unavailableCopy", "heatingStops.candidateNext"],
-  heating_optimizer: ["heatingStops.optimizer", "heatingStops.optimizerCopy", "heatingStops.singleNext"],
+  heating_optimizer: ["heatingStops.optimizer", "heatingStops.optimizerCopy", "heatingStops.optimizerNext"],
 };
 
 export function getHeatingStopReasonMeta(reason) {
@@ -54,7 +54,7 @@ export function getHeatingStopCopy(event, subject) {
   const snapshot = event._oq_heating_stop_snapshot;
   const lowLoad = event.reason === "ph_low_load";
   const hasValue = (value) => typeof value === "number" && Number.isInteger(value) && value >= -32767 && value <= 32767;
-  const values = snapshot ? [
+  const supportValues = snapshot ? [
     hasValue(snapshot.power.value_a) || hasValue(snapshot.power.value_b) ? t("heatingStops.powerValues", {
       base: snapshotValue(snapshot.power.value_a, 0), effective: snapshotValue(snapshot.power.value_b, 0),
       thermal: snapshotValue(snapshot.power.threshold_a, 0),
@@ -70,6 +70,23 @@ export function getHeatingStopCopy(event, subject) {
       restart: snapshotValue(snapshot.water.value_b, 2, 100),
     }) : "",
   ].filter(Boolean) : [];
+  let snapshotSummary = "";
+  if (snapshot) {
+    const powerValue = (value) => Math.abs(value) === 32767 ? `${snapshotValue(value, 0)} W` : `${snapshotValue(value, 1, 1000)} kW`;
+    if (["ph_comfort_stop", "ph_comfort_hold"].includes(event.reason) && hasValue(snapshot.room.value_a) && hasValue(snapshot.room.threshold_a)) {
+      snapshotSummary = t("heatingStops.roomBrief", {
+        room: snapshotValue(snapshot.room.value_a, 2, 100), stop: snapshotValue(snapshot.room.threshold_a, 2, 100),
+      });
+    } else if (lowLoad && hasValue(snapshot.power.value_b) && hasValue(snapshot.water.threshold_a)) {
+      snapshotSummary = t("heatingStops.lowLoadBrief", {
+        demand: powerValue(snapshot.power.value_b), stop: powerValue(snapshot.water.threshold_a),
+      });
+    } else if (["curve_water_stop", "curve_low_load"].includes(event.reason) && hasValue(snapshot.water.value_a) && hasValue(snapshot.water.threshold_a)) {
+      snapshotSummary = t("heatingStops.waterBrief", {
+        water: snapshotValue(snapshot.water.value_a, 2, 100), stop: snapshotValue(snapshot.water.threshold_a, 2, 100),
+      });
+    }
+  }
   const summary = t(keys[1]);
   let next = t(keys[2]);
   if (snapshot && hasValue(snapshot.room.value_b) && ["ph_comfort_stop", "ph_comfort_hold"].includes(event.reason)) {
@@ -80,8 +97,7 @@ export function getHeatingStopCopy(event, subject) {
   return {
     title: t("heatingStops.title", { subject, reason: t(keys[0]) }), summary,
     reasonLabel: t(keys[0]), reasonSummary: summary,
-    detail: [summary, ...values, snapshot ? t("heatingStops.age", { seconds: snapshot.power.duration_s })
-      : t("heatingStops.missing"), t("heatingStops.residual")].join(" "),
-    next, checks: [], snapshotSummary: values.join(" · "),
+    detail: t("heatingStops.residual"), next, checks: [], snapshotSummary, heatingStop: true,
+    supportValues: [...supportValues, snapshot ? t("heatingStops.age", { seconds: snapshot.power.duration_s }) : t("heatingStops.missing")],
   };
 }

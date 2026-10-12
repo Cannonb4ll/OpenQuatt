@@ -1755,6 +1755,8 @@ import { formatDate, formatNumber, formatTime, getIntlLocale, optionLabel, t } f
       title: copy.title,
       summary: copy.summary,
       snapshotSummary: copy.snapshotSummary || "",
+      heatingStop: Boolean(copy.heatingStop),
+      supportValues: copy.supportValues || [],
       detailTitle: t("controlReplay.evDetailWhy"),
       detail: copy.detail,
       next: copy.next,
@@ -2810,16 +2812,15 @@ import { formatDate, formatNumber, formatTime, getIntlLocale, optionLabel, t } f
         <span class="oq-working-entry-body">
           <span class="oq-working-entry-title">
             <strong>${escapeHtml(item.title)}</strong>
-            ${renderControlWorkingModeBadge(item)}
+            ${item.heatingStop ? "" : renderControlWorkingModeBadge(item)}
             ${item.count ? `<em>${escapeHtml(item.count)}</em>` : ""}
           </span>
-          <span class="oq-working-entry-summary">${escapeHtml(item.summary)}</span>
-          ${item.snapshotSummary ? `<span class="oq-working-entry-summary">${escapeHtml(item.snapshotSummary)}</span>` : ""}
+          <span class="oq-working-entry-summary">${escapeHtml(item.snapshotSummary || item.summary)}</span>
           <span class="oq-working-entry-meta">
             <span>${escapeHtml(item.source)}</span>
-            ${modeMetaLabel ? `<span class="oq-working-entry-meta-mode">${escapeHtml(modeMetaLabel)}</span>` : ""}
-            <span>${escapeHtml(item.reasonLabel || getControlWorkingReasonLabel(item.reasonCode))}</span>
-            ${item.duration ? `<span>${escapeHtml(t("controlReplay.entryDuration", { value: item.duration }))}</span>` : ""}
+            ${!item.heatingStop && modeMetaLabel ? `<span class="oq-working-entry-meta-mode">${escapeHtml(modeMetaLabel)}</span>` : ""}
+            ${item.heatingStop ? "" : `<span>${escapeHtml(item.reasonLabel || getControlWorkingReasonLabel(item.reasonCode))}</span>`}
+            ${!item.heatingStop && item.duration ? `<span>${escapeHtml(t("controlReplay.entryDuration", { value: item.duration }))}</span>` : ""}
           </span>
         </span>
         <span class="oq-working-entry-status">${escapeHtml(status.label)}</span>
@@ -2842,34 +2843,40 @@ import { formatDate, formatNumber, formatTime, getIntlLocale, optionLabel, t } f
       <aside class="oq-working-detail oq-working-detail--${escapeHtml(status.tone)}">
         <div>
           <span class="oq-working-eyebrow">${t("controlReplay.detailSelected")}</span>
-          <h3>${escapeHtml(item.title)}${renderControlWorkingModeBadge(item)}</h3>
+          <h3>${escapeHtml(item.title)}${item.heatingStop ? "" : renderControlWorkingModeBadge(item)}</h3>
           <p>${escapeHtml(item.summary)}</p>
         </div>
-        <div class="oq-working-detail-block">
+        ${item.heatingStop && item.snapshotSummary ? `<div class="oq-working-detail-block">
+          <strong>${t("heatingStops.atStop")}</strong>
+          <span>${escapeHtml(item.snapshotSummary)}</span>
+        </div>` : ""}
+        ${item.heatingStop ? "" : `<div class="oq-working-detail-block">
           <strong>${t("controlReplay.detailWhy")}</strong>
           <span>${escapeHtml(item.detail)}</span>
         </div>
         <div class="oq-working-detail-block">
           <strong>${t("controlReplay.detailNormal")}</strong>
           <span>${escapeHtml(reasonSummary)}</span>
-        </div>
+        </div>`}
         <div class="oq-working-detail-block">
           <strong>${t("controlReplay.detailNext")}</strong>
           <span>${escapeHtml(item.next)}</span>
         </div>
+        ${item.heatingStop ? `<p>${escapeHtml(item.detail)}</p>` : ""}
         ${renderControlWorkingOptimizer(optimizer)}
         ${checks.length ? `
           <div class="oq-working-checks" aria-label="${t("controlReplay.detailFactors")}">
             ${checks.map((check) => `<span>${renderOqIcon("shield", "oq-working-reason-icon")} ${escapeHtml(check)}</span>`).join("")}
           </div>
         ` : ""}
-        <div class="oq-working-pill-row">
+        ${item.heatingStop ? "" : `<div class="oq-working-pill-row">
           ${renderControlWorkingPill(status.label, status.tone, "shield")}
           ${renderControlWorkingPill(reasonLabel, "info", "target")}
           ${renderControlWorkingPill(item.source, "context")}
-        </div>
+        </div>`}
         <details class="oq-working-support" data-replay-support-item="${escapeHtml(item.id)}"${state.controlReplaySupportDetailsItemId === item.id ? " open" : ""}>
           <summary data-oq-action="toggle-control-replay-support-details">${t("controlReplay.detailSupport")}</summary>
+          ${(item.supportValues || []).map((value) => `<p>${escapeHtml(value)}</p>`).join("")}
           <dl>
             <div><dt>${t("controlReplay.detailRecord")}</dt><dd>${escapeHtml(getControlWorkingKindLabel(item.kind))}</dd></div>
             <div><dt>${t("controlReplay.detailSource")}</dt><dd>${escapeHtml(item.source)}</dd></div>
