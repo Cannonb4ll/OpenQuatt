@@ -29,7 +29,7 @@ class OduEepromFixtureTest(unittest.TestCase):
         self.repo = Path(directory.name)
         self.fixtures = self.repo / "tests/fixtures"
         self.fixtures.mkdir(parents=True)
-        for name, _ in VALIDATOR.FIXTURES:
+        for name, _, _ in VALIDATOR.FIXTURES:
             shutil.copyfile(ROOT / "tests/fixtures" / name, self.fixtures / name)
 
     def run_validator(self):
@@ -65,6 +65,55 @@ class OduEepromFixtureTest(unittest.TestCase):
         words[100] ^= 1
         path.write_text(replace_array(text, "EEPROM_WORDS", words))
         self.assertIn("baseline EEPROM CRC mismatch", " ".join(self.run_validator()["errors"]))
+
+    def test_another_valid_fixture_cannot_replace_either_v2_reference(self):
+        for name, replacement in (("v2_old_amh6_eeprom.h", "v2_new_amh6_eeprom.h"),
+                                  ("v2_new_amh6_eeprom.h", "v2_old_amh6_eeprom.h")):
+            with self.subTest(fixture=name):
+                shutil.copyfile(ROOT / "tests/fixtures" / replacement, self.fixtures / name)
+                errors = self.run_validator()["errors"]
+                self.assertTrue(any(error.startswith(name + ":") and
+                                    "EEPROM payload differs from pinned fixture" in error for error in errors), errors)
+
+    def test_changed_data_fails_even_with_valid_recalculated_crc(self):
+        path = self.fixtures / "v2_old_amh6_eeprom.h"
+        text = path.read_text()
+        words = VALIDATOR.fixture_array(text, "EEPROM_WORDS", 512)
+        words[100] ^= 1
+        crc = VALIDATOR.modbus(bytes(words[:510]))
+        words[510:512] = [crc & 255, crc >> 8]
+        self.assertEqual(VALIDATOR.modbus(bytes(words)), 0)
+        text = replace_array(text, "EEPROM_WORDS", words)
+        text = re.sub(r"(\bEEPROM_CRC\s*=\s*)[^;]+;", lambda match: match[1] + str(crc) + "U;", text)
+        path.write_text(text)
+        self.assertIn("EEPROM payload differs from pinned fixture", " ".join(self.run_validator()["errors"]))
+
+    def test_changed_capture_fails_even_with_updated_calculated_crc(self):
+        for name in ("v1_eeprom.h", "v1_5_eeprom.h"):
+            with self.subTest(fixture=name):
+                path = self.fixtures / name
+                text = path.read_text()
+                captured = VALIDATOR.fixture_array(text, "CAPTURED_COOLING_WORDS", 11)
+                captured[2] ^= 1
+                runtime = VALIDATOR.fixture_array(text, "EEPROM_WORDS", 512)
+                runtime[1:12] = captured
+                crc = VALIDATOR.modbus(bytes(runtime[:510]))
+                self.assertNotEqual(crc, runtime[510] | runtime[511] << 8)
+                text = replace_array(text, "CAPTURED_COOLING_WORDS", captured)
+                text = re.sub(r"(\bCAPTURED_CALCULATED_CRC\s*=\s*)[^;]+;",
+                              lambda match: match[1] + str(crc) + "U;", text)
+                path.write_text(text)
+                errors = self.run_validator()["errors"]
+                self.assertTrue(any(error.startswith(name + ":") and
+                                    "runtime payload differs from pinned capture" in error for error in errors), errors)
+
+    def test_comments_and_equivalent_cpp_literals_preserve_pinned_payload(self):
+        path = self.fixtures / "v2_old_amh6_eeprom.h"
+        text = path.read_text()
+        words = VALIDATOR.fixture_array(text, "EEPROM_WORDS", 512)
+        text = replace_array(text, "EEPROM_WORDS", ["0" + format(word, "o") + "U" for word in words])
+        path.write_text(text + "\n// Comment-only updates do not change EEPROM data.\n")
+        self.assertEqual(self.run_validator()["result"], "PASS")
 
     def test_high_byte_is_not_hidden_by_low_byte_crc(self):
         path = self.fixtures / "v1_eeprom.h"
