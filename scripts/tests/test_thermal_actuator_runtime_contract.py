@@ -51,9 +51,8 @@ class ThermalActuatorRuntimeContractTest(unittest.TestCase):
                  "openquatt/includes/control/oq_compressor_start_limit.h", "tests/host/compressor_start_limit_test.cpp",
                  "scripts/tests/test_thermal_actuator_runtime_contract.py", "scripts/tests/test_v2_compressor_level_contract.py",
                  "scripts/tests/test_compressor_frequency_policy_contract.py")
-        # Includes restart credit, frequency diagnosis, start quota and the defrost actuator adapter.
-        # Physical stand limits, temperature service gate and optimistic-write recovery.
-        self.assertLessEqual(sum(len((ROOT / path).read_text().splitlines()) for path in paths), 1730)
+        # Restart credit, temperature service gate, optimistic recovery and safety-stop retries.
+        self.assertLessEqual(sum(len((ROOT / path).read_text().splitlines()) for path in paths), 1734)
 
     def test_start_quota_covers_retained_writes_and_final_transitions(self) -> None:
         actuator = RUNTIME[RUNTIME.index("int apply_level_"):RUNTIME.index("int previous_applied_")]

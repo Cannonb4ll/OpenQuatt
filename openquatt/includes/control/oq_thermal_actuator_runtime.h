@@ -252,7 +252,8 @@ class Runtime {
                           bool manual_service_active) const {
     if (id(oq_incident_manager).startup_inhibited(is_hp1 ? 1U : 2U)) return 0;
     int mode_code = active && request_thermal_active ? request_mode_code : 0;
-    if (manual_service_active && id(oq_manual_hp_mode_allowed)) {
+    // A selected manual mode is intent, not permission to energize an F0/blocked output.
+    if (active && manual_service_active && id(oq_manual_hp_mode_allowed)) {
       const int manual_mode = is_hp1 ? id(oq_manual_hp1_mode_code) : id(oq_manual_hp2_mode_code);
       if (manual_mode > 0) mode_code = manual_mode;
     }
@@ -449,25 +450,25 @@ class Runtime {
     const uint8_t hp_index = is_hp1 ? 1U : 2U;
     const auto incident = id(oq_incident_manager).get_outputs(hp_index);
     auto* defrost = is_hp1 ? &id(hp1_odu_defrost) : &OQ_ACTUATOR_SECONDARY_ID(odu_defrost);
+    const bool stop_pending = incident.run_state == oq_incidents::RunState::STOPPING ||
+                              incident.run_state == oq_incidents::RunState::STOP_UNCONFIRMED;
+    // STOPPING may outlive its global cause without must_stop; finish the physical stop before defrost.
+    const bool safety_stop = stop_pending || this->defrost_safety_stop_(is_hp1);
     if (defrost->cycle.telemetry_fault(cycle.config.now_ms)) requested = level = 0;
     // Preserve the current command while the ODU owns the cycle. Hard safety
     // stops remain authoritative; ordinary demand changes wait for completion.
-    if (!this->defrost_safety_stop_(is_hp1) &&
+    if (!safety_stop &&
         (!defrost->cycle.fresh(cycle.config.now_ms) || defrost->holding() || defrost->cycle.observed_active()))
       return previous;
     uint32_t& last_safe_write_ms = this->last_safe_stop_write_ms(is_hp1);
-    const bool stop_pending = incident.run_state == oq_incidents::RunState::STOPPING ||
-                              incident.run_state == oq_incidents::RunState::STOP_UNCONFIRMED;
-    const bool force_safe_write = oq_incident_actuator::safe_stop_write_retry_due(
-        stop_pending || defrost->cycle.telemetry_fault(cycle.config.now_ms), cycle.config.now_ms, last_safe_write_ms,
-        10000U);
+    const bool force_safe_write =
+        oq_incident_actuator::safe_stop_write_retry_due(safety_stop, cycle.config.now_ms, last_safe_write_ms, 10000U);
 
     // Contract order: incident stop -> defrost hold -> cooling rest -> per-HP rest -> start quota
     // -> valid mode -> frequency policy -> start/stop registration -> physical write.
     const auto incident_guard =
         oq_incident_actuator::decide({level, previous, incident.available_for_start,
-                                      incident.must_stop || defrost->cycle.telemetry_fault(cycle.config.now_ms) ||
-                                          id(oq_incident_manager).startup_inhibited(hp_index)});
+                                      safety_stop || id(oq_incident_manager).startup_inhibited(hp_index)});
     const bool may_retain =
         oq_thermal_actuator::may_retain_command(previous, incident_guard.bypass_runtime_and_defrost_holds);
     if (!may_retain) this->clear_retained_level(is_hp1);
@@ -647,7 +648,8 @@ class Runtime {
             this->set_mode(is_hp1, false, force_safe_write, cycle.request_mode_code, cycle.request_thermal_active,
                            cycle.manual_service_active);
           });
-      if (register_initial_stop || force_safe_write) last_safe_write_ms = cycle.config.now_ms;
+      // Do not slide the retry deadline on each running readback when cached-zero writes are no-ops.
+      if (previous > 0 || register_incident_stop || force_safe_write) last_safe_write_ms = cycle.config.now_ms;
     }
 
     if (applied == 0 && level > 0) {
@@ -780,9 +782,11 @@ class Runtime {
 
   bool defrost_safety_stop_(bool is_hp1) const {
     const uint8_t hp = is_hp1 ? 1U : 2U;
+    const auto incident = id(oq_incident_manager).get_outputs(hp);
     const auto& cycle = (is_hp1 ? id(hp1_odu_defrost) : OQ_ACTUATOR_SECONDARY_ID(odu_defrost)).cycle;
-    return id(oq_water_temp_hard_trip_active) || id(oq_lowflow_fault_active) ||
-           id(oq_incident_manager).get_outputs(hp).must_stop || cycle.telemetry_fault(millis());
+    return id(oq_water_temp_hard_trip_active) || id(oq_lowflow_fault_active) || incident.must_stop ||
+           incident.run_state == oq_incidents::RunState::STOPPING ||
+           incident.run_state == oq_incidents::RunState::STOP_UNCONFIRMED || cycle.telemetry_fault(millis());
   }
   void update_defrost_(bool is_hp1, uint32_t now) {
     auto* service = is_hp1 ? &id(hp1_odu_defrost) : &OQ_ACTUATOR_SECONDARY_ID(odu_defrost);

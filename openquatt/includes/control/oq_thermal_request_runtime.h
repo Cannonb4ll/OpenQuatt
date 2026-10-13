@@ -191,6 +191,9 @@ class Runtime {
   }
 
   int defrost_hold_(bool is_hp1, const oq_frequency_runtime::Context& frequency) const {
+    // A global safety stop must not turn an inactive request back into a
+    // positive defrost hold after the minimum-runtime hold was rejected.
+    if (id(oq_water_temp_hard_trip_active) || id(oq_lowflow_fault_active)) return 0;
     const bool defrost = is_hp1 ? id(hp1_4_way_valve).state : OQ_REQUEST_SECONDARY_ID(4_way_valve).state;
     const int previous_physical =
         is_hp1 ? id(hp1_last_commanded_physical_level) : OQ_REQUEST_SECONDARY_ID(last_commanded_physical_level);

@@ -15,8 +15,10 @@ inline float minimum_defrost_flow_lph = NAN;
 
 inline bool guarded_write(bool hp1, uint16_t address, int value, bool queued = false) {
   const unsigned hp = hp1 ? 1U : 2U;
-  const bool hard_stop = id(oq_water_temp_hard_trip_active) || id(oq_lowflow_fault_active) ||
-                         id(oq_incident_manager).get_outputs(hp).must_stop;
+  const auto incident = id(oq_incident_manager).get_outputs(hp);
+  const bool hard_stop = id(oq_water_temp_hard_trip_active) || id(oq_lowflow_fault_active) || incident.must_stop ||
+                         incident.run_state == oq_incidents::RunState::STOPPING ||
+                         incident.run_state == oq_incidents::RunState::STOP_UNCONFIRMED;
   auto& service = hp1 ? id(hp1_odu_defrost) : OQ_COMMAND_SECONDARY_ID(odu_defrost);
   const bool fault = hard_stop || service.cycle.telemetry_fault(millis());
   if (queued && address == 3999 && value == 4) {
@@ -25,7 +27,6 @@ inline bool guarded_write(bool hp1, uint16_t address, int value, bool queued = f
         hp1 ? id(hp1_odu_generation_detection_complete) && !id(hp1_odu_generation_revalidation_required)
             : OQ_COMMAND_SECONDARY_ID(odu_generation_detection_complete) &&
                   !OQ_COMMAND_SECONDARY_ID(odu_generation_revalidation_required);
-    const auto incident = id(oq_incident_manager).get_outputs(hp);
     const float hz = hp1 ? id(hp1_compressor_frequency).state : OQ_COMMAND_SECONDARY_ID(compressor_frequency).state;
     const bool flow = id(flow_rate_selected).has_state() &&
                       oq_defrost::minimum_flow_ready(id(flow_rate_selected).state, minimum_defrost_flow_lph);

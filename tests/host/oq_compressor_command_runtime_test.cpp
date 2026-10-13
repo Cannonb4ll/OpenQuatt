@@ -9,6 +9,7 @@
 
 #include "../../openquatt/includes/control/oq_defrost_logic.h"
 #include "../../openquatt/includes/odu/oq_odu_frequency_table.h"
+#include "../../openquatt/includes/incidents/oq_hp_incident_engine.h"
 
 #ifndef OQ_TOPOLOGY_DUO
 #define OQ_TOPOLOGY_DUO 1
@@ -34,6 +35,7 @@ struct FakeSelect {
   void publish_state(const char* value) { option = value; }
 };
 struct FakeIncidentOutput {
+  oq_incidents::RunState run_state{oq_incidents::RunState::RUNNING};
   bool must_stop{false};
   bool running_confirmed{true};
 };
@@ -357,6 +359,24 @@ void queued_safety_zero_is_readonly_and_temperature_independent() {
   assert(hp1_odu_defrost.normal_write_calls == 0);
   assert(hp1_odu_defrost.queue_clear_calls == 0);
   assert(!queued(true, 1999, 17));
+  // An unresolved stop remains authoritative after the global fault clears.
+  for (const auto state : {oq_incidents::RunState::STOPPING, oq_incidents::RunState::STOP_UNCONFIRMED}) {
+    for (const bool is_hp1 : {true, false}) {
+#if !OQ_TOPOLOGY_DUO
+      if (!is_hp1) continue;
+#endif
+      reset();
+      oq_incident_manager.outputs[is_hp1 ? 0 : 1].run_state = state;
+      auto& service = is_hp1 ? hp1_odu_defrost : hp2_odu_defrost;
+      service.hold = true;
+      service.cycle.mode_seen = false;
+      assert(queued(is_hp1, 3999, 0));
+      assert(queued(is_hp1, 1999, 0));
+      assert(!queued(is_hp1, 3999, 2));
+      assert(!queued(is_hp1, 1999, 17));
+      assert(!queued(is_hp1, 3999, 4));
+    }
+  }
   reset();
   hp1_odu_defrost.hold = true;
   assert(!queued(true, 1999, 0));  // Ordinary stop cannot override the ODU hold.
