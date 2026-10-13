@@ -6,6 +6,7 @@
 #include <cstring>
 #include <string>
 
+#include "../boiler/oq_boiler_logic.h"
 #include "../performance/hp_perf_frequency.h"
 #include "../service/oq_service_logic.h"
 #include "../service/tasks/oq_manual_hp_logic.h"
@@ -14,6 +15,7 @@
 #include "oq_control_mode_log_logic.h"
 #include "oq_defrost_logic.h"
 #include "oq_hp_candidate_logic.h"
+#include "oq_hp_supervisory_logic.h"
 #include "oq_power_house_runtime.h"
 #include "oq_supervisory_power_limiter_runtime.h"
 #include "oq_supervisory_safety_runtime.h"
