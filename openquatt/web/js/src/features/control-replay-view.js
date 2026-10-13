@@ -1,4 +1,5 @@
 import { describeFrequencyLimit } from "./frequency-limits.js";
+import { attachHeatingStopSnapshots, getHeatingStopCopy, getHeatingStopReasonMeta, getHeatingStopSupportValues } from "./control-replay-heating-stops.js";
 import { getEntityNumericValue, getEntityStateText, hasEntity, isEntityActive } from "../core/app-shared.js";
 import { renderOqIcon } from "../core/config.js";
 import { parseLooseNumber } from "../core/entity-store.js";
@@ -463,6 +464,7 @@ import { formatDate, formatNumber, formatTime, getIntlLocale, optionLabel, t } f
   function getControlWorkingReasonMeta(reasonCode) {
     return resolveControlWorkingReasonMeta(
       CONTROL_WORKING_REASON_METAS[reasonCode]
+      || getHeatingStopReasonMeta(reasonCode)
       || getControlReplayIncidentReasonMeta(reasonCode)
       || CONTROL_WORKING_REASON_FALLBACK,
     );
@@ -1217,6 +1219,8 @@ import { formatDate, formatNumber, formatTime, getIntlLocale, optionLabel, t } f
     const subject = getDecisionSubjectLabel(event?.subject);
     const reasonCode = String(event?.reason || "unknown");
     const isCoolingModeEvent = Number(event?._oq_context_cm ?? event?.cm) === 5;
+    const heatingStopCopy = !isCoolingModeEvent && getHeatingStopCopy(event, subject);
+    if (heatingStopCopy) return heatingStopCopy;
     const activeCoolingSource = event?._oq_active_cooling_source || t("controlReplay.subjHp");
     const activeHeatingSource = event?._oq_active_heating_source || t("controlReplay.subjHp");
     const coolingStopReason = String(event?._oq_cooling_stop_reason || (reasonCode === "dew_stop" ? "dew_stop" : ""));
@@ -1723,7 +1727,7 @@ import { formatDate, formatNumber, formatTime, getIntlLocale, optionLabel, t } f
   function mapDecisionEventToControlWorkingItem(event, selectedWindow, nowMs) {
     const eventType = String(event?.event_type || "");
     const reasonCode = String(event?.reason || "unknown");
-    if (!eventType || eventType === "boot_marker" || event?._oq_hidden) {
+    if (!eventType || eventType === "boot_marker" || eventType === "heating_stop_context" || event?._oq_hidden) {
       return null;
     }
     if ((eventType === "defrost_seen_start" || eventType === "defrost_seen_clear") && Number(event?._oq_context_cm ?? event?.cm) === 5) {
@@ -1752,6 +1756,8 @@ import { formatDate, formatNumber, formatTime, getIntlLocale, optionLabel, t } f
       time: formatDecisionLogTimeLabel(event, selectedWindow, nowMs),
       title: copy.title,
       summary: copy.summary,
+      snapshotSummary: copy.snapshotSummary || "",
+      heatingStop: Boolean(copy.heatingStop),
       detailTitle: t("controlReplay.evDetailWhy"),
       detail: copy.detail,
       next: copy.next,
@@ -2085,7 +2091,7 @@ import { formatDate, formatNumber, formatTime, getIntlLocale, optionLabel, t } f
   }
 
   function enrichControlWorkingDecisionLogEvents(events) {
-    const sorted = [...events].sort(compareDecisionEvents);
+    const sorted = attachHeatingStopSnapshots([...events].sort(compareDecisionEvents));
     const activeSourceCm = { HP1: 0, HP2: 0 };
     const defrostOpen = { HP1: false, HP2: false };
     let activeTopologyCm = 0;
@@ -2807,15 +2813,15 @@ import { formatDate, formatNumber, formatTime, getIntlLocale, optionLabel, t } f
         <span class="oq-working-entry-body">
           <span class="oq-working-entry-title">
             <strong>${escapeHtml(item.title)}</strong>
-            ${renderControlWorkingModeBadge(item)}
+            ${item.heatingStop ? "" : renderControlWorkingModeBadge(item)}
             ${item.count ? `<em>${escapeHtml(item.count)}</em>` : ""}
           </span>
-          <span class="oq-working-entry-summary">${escapeHtml(item.summary)}</span>
+          <span class="oq-working-entry-summary">${escapeHtml(item.snapshotSummary || item.summary)}</span>
           <span class="oq-working-entry-meta">
             <span>${escapeHtml(item.source)}</span>
-            ${modeMetaLabel ? `<span class="oq-working-entry-meta-mode">${escapeHtml(modeMetaLabel)}</span>` : ""}
-            <span>${escapeHtml(item.reasonLabel || getControlWorkingReasonLabel(item.reasonCode))}</span>
-            ${item.duration ? `<span>${escapeHtml(t("controlReplay.entryDuration", { value: item.duration }))}</span>` : ""}
+            ${!item.heatingStop && modeMetaLabel ? `<span class="oq-working-entry-meta-mode">${escapeHtml(modeMetaLabel)}</span>` : ""}
+            ${item.heatingStop ? "" : `<span>${escapeHtml(item.reasonLabel || getControlWorkingReasonLabel(item.reasonCode))}</span>`}
+            ${!item.heatingStop && item.duration ? `<span>${escapeHtml(t("controlReplay.entryDuration", { value: item.duration }))}</span>` : ""}
           </span>
         </span>
         <span class="oq-working-entry-status">${escapeHtml(status.label)}</span>
@@ -2834,38 +2840,45 @@ import { formatDate, formatNumber, formatTime, getIntlLocale, optionLabel, t } f
     const optimizer = getControlWorkingOptimizerModel(item);
     const modeMetaLabel = getControlWorkingModeMetaLabel(item);
     const checks = Array.isArray(item.checks) ? item.checks : reason.checks;
+    const supportValues = item.heatingStop ? getHeatingStopSupportValues(item.rawDecisionEvent) : [];
     return `
       <aside class="oq-working-detail oq-working-detail--${escapeHtml(status.tone)}">
         <div>
           <span class="oq-working-eyebrow">${t("controlReplay.detailSelected")}</span>
-          <h3>${escapeHtml(item.title)}${renderControlWorkingModeBadge(item)}</h3>
+          <h3>${escapeHtml(item.title)}${item.heatingStop ? "" : renderControlWorkingModeBadge(item)}</h3>
           <p>${escapeHtml(item.summary)}</p>
         </div>
-        <div class="oq-working-detail-block">
+        ${item.heatingStop && item.snapshotSummary ? `<div class="oq-working-detail-block">
+          <strong>${t("heatingStops.atStop")}</strong>
+          <span>${escapeHtml(item.snapshotSummary)}</span>
+        </div>` : ""}
+        ${item.heatingStop ? "" : `<div class="oq-working-detail-block">
           <strong>${t("controlReplay.detailWhy")}</strong>
           <span>${escapeHtml(item.detail)}</span>
         </div>
         <div class="oq-working-detail-block">
           <strong>${t("controlReplay.detailNormal")}</strong>
           <span>${escapeHtml(reasonSummary)}</span>
-        </div>
+        </div>`}
         <div class="oq-working-detail-block">
           <strong>${t("controlReplay.detailNext")}</strong>
           <span>${escapeHtml(item.next)}</span>
         </div>
+        ${item.heatingStop ? `<p>${escapeHtml(item.detail)}</p>` : ""}
         ${renderControlWorkingOptimizer(optimizer)}
         ${checks.length ? `
           <div class="oq-working-checks" aria-label="${t("controlReplay.detailFactors")}">
             ${checks.map((check) => `<span>${renderOqIcon("shield", "oq-working-reason-icon")} ${escapeHtml(check)}</span>`).join("")}
           </div>
         ` : ""}
-        <div class="oq-working-pill-row">
+        ${item.heatingStop ? "" : `<div class="oq-working-pill-row">
           ${renderControlWorkingPill(status.label, status.tone, "shield")}
           ${renderControlWorkingPill(reasonLabel, "info", "target")}
           ${renderControlWorkingPill(item.source, "context")}
-        </div>
+        </div>`}
         <details class="oq-working-support" data-replay-support-item="${escapeHtml(item.id)}"${state.controlReplaySupportDetailsItemId === item.id ? " open" : ""}>
           <summary data-oq-action="toggle-control-replay-support-details">${t("controlReplay.detailSupport")}</summary>
+          ${supportValues.map((value) => `<p>${escapeHtml(value)}</p>`).join("")}
           <dl>
             <div><dt>${t("controlReplay.detailRecord")}</dt><dd>${escapeHtml(getControlWorkingKindLabel(item.kind))}</dd></div>
             <div><dt>${t("controlReplay.detailSource")}</dt><dd>${escapeHtml(item.source)}</dd></div>
