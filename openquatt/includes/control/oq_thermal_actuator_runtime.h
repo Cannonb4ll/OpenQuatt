@@ -432,7 +432,7 @@ class Runtime {
   }
 
   int apply_level_(bool is_hp1, int requested, bool was_cooling, Cycle& cycle) {
-    constexpr int MAX_LEVEL = 10;
+    const int MAX_LEVEL = cycle.frequency.automatic_level_limit(is_hp1, cycle.request_mode_code);
     const int maximum = cycle.manual_service_active
                             ? oq_odu::physical_level_limit(cycle.frequency.configured_v2,
                                                            cycle.frequency.snapshot(is_hp1), cycle.request_mode_code)
@@ -505,9 +505,9 @@ class Runtime {
     this->publish_defrost_hold_start(is_hp1, defrost_hold, retained, requested);
     if (defrost_hold) {
       char reason[96];
-      snprintf(reason, sizeof(reason), "defrost hold at model level %d / physical F%d", retained.control_level,
+      snprintf(reason, sizeof(reason), "defrost hold at requested F%d / physical F%d", retained.control_level,
                retained.physical_level);
-      this->service_guard_(cycle, is_hp1) = "ontdooihold op modelstand " + std::to_string(retained.control_level);
+      this->service_guard_(cycle, is_hp1) = "ontdooihold op compressorstand " + std::to_string(retained.control_level);
       this->log_block_change(is_hp1, reason);
       this->apply_active_mode_hold(is_hp1, retained, cycle.request_mode_option);
       this->publish_optimizer_reason("defrost_protect_hold");
@@ -563,7 +563,10 @@ class Runtime {
     const bool use_frequency_policy = !cycle.manual_service_active;
     if (applied > 0 && use_frequency_policy) {
       cap_hz = cycle.frequency.cap_hz;
-      applied = cycle.frequency.pick_allowed_level(is_hp1, expected_mode, applied, 1, MAX_LEVEL);
+      // A policy fallback may not undo bounded continuation's no-increase
+      // verdict when the incident manager has withdrawn the HP's availability.
+      const int policy_maximum = incident.available_for_start ? MAX_LEVEL : std::min(MAX_LEVEL, previous);
+      applied = cycle.frequency.pick_allowed_level(is_hp1, expected_mode, applied, 1, policy_maximum);
     }
 
     oq_odu::LevelCommand command{};

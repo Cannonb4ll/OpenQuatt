@@ -54,9 +54,13 @@ class Runtime {
 #endif
     const auto oil_return = oq_curve::update_oil_return_hold(now_ms, oil_return_active,
                                                              id(oq_curve_oil_return_hold_until_ms), kOilReturnHoldMs);
-    int applied_total = std::max(0, static_cast<int>(id(hp1_last_applied_level)));
+    // Physical stand numbers are not the normalized PID demand scale.
+    const auto demand_frequency = oq_frequency_runtime::capture();
+    int applied_total = oq_odu::normalized_heating_demand_level(
+        demand_frequency.configured_v2, demand_frequency.snapshot(true), id(hp1_last_applied_level));
 #if OQ_TOPOLOGY_DUO
-    applied_total += std::max(0, static_cast<int>(id(hp2_last_applied_level)));
+    applied_total += oq_odu::normalized_heating_demand_level(
+        demand_frequency.configured_v2, demand_frequency.snapshot(false), id(hp2_last_applied_level));
 #endif
     oq_curve::DemandState previous{id(oq_curve_heat_request_active),
                                    id(oq_curve_stop_arm_ms),
@@ -64,7 +68,11 @@ class Runtime {
                                    id(oq_curve_restart_inhibit_active),
                                    id(oq_curve_restart_blocked_by_room),
                                    id(oq_curve_regime_code)};
-    const bool compressor_active = applied_total > 0;
+    const bool compressor_active = id(hp1_last_applied_level) > 0
+#if OQ_TOPOLOGY_DUO
+                                   || id(hp2_last_applied_level) > 0
+#endif
+        ;
     const auto intent =
         oq_heat_intent_runtime::evaluate(now_ms, compressor_active, tuning.room_resume_heat_c, 0,
                                          ot_room_temperature_fresh, ot_room_setpoint_fresh, this->intent_state_);
@@ -239,7 +247,7 @@ class Runtime {
     if (!urgent && !oq_curve::cadence_due(now_ms, id(oq_curve_request_last_loop_ms), config.loop_ms)) return;
     id(oq_curve_request_last_loop_ms) = oq_curve::timestamp_ms(now_ms);
 
-    constexpr int level_cap = 10;
+    constexpr int level_cap = oq_odu::EXTENDED_PHYSICAL_LEVEL_MAX;
     const int raw = std::max(0, std::min(config.demand_max_f, static_cast<int>(id(oq_demand_raw))));
     id(oq_demand_filtered_prev) = id(oq_demand_filtered);
     id(oq_demand_filtered) = raw;
@@ -254,21 +262,17 @@ class Runtime {
     id(oq_last_lead_hp) = lead_is_hp1 ? 1 : 2;
     const auto frequency = oq_frequency_runtime::capture();
     const bool allow_low_supply_boundary_estimate = id(oq_cold_start_session_active) && !id(oq_cold_start_hp_blocked);
-    const bool hp1_valve_defrost = id(hp1_4_way_valve).state;
-#if OQ_TOPOLOGY_DUO
-    const bool hp2_valve_defrost = id(hp2_4_way_valve).state;
-#else
-    const bool hp2_valve_defrost = false;
-#endif
     id(oq_P_hp_cap_w) = 0.0f;
     id(oq_P_deficit_w) = 0.0f;
     int owner = 0;
     int hp1_level = 0;
     int hp2_level = 0;
     const float demand_u = oq_curve::power_capped_demand_u(id(oq_curve_demand_continuous), capped, config.demand_max_f);
-    const float dispatch_u = config.demand_max_f > 0 ? static_cast<float>(capped) / config.demand_max_f : 0.0f;
     const bool demand_active = demand_u > 0.0f;
 #if OQ_TOPOLOGY_DUO
+    const bool hp1_valve_defrost = id(hp1_4_way_valve).state;
+    const bool hp2_valve_defrost = id(hp2_4_way_valve).state;
+    const float dispatch_u = config.demand_max_f > 0 ? static_cast<float>(capped) / config.demand_max_f : 0.0f;
     const auto tuning = this->tuning_();
     const float target_c = this->effective_supply_target(id(oq_supply_target_temp).state);
     const float supply_c = id(oq_system_supply_temp).state;
@@ -277,18 +281,29 @@ class Runtime {
     const int previous_capped = id(oq_demand_filtered_prev);
     bool hp1_model_available = false;
     bool hp2_model_available = false;
+    std::array<float, level_cap + 1> hp1_power{}, hp2_power{};
+    const auto build_power = [&](bool hp1, auto& powers, bool& model_available) {
+      powers.fill(NAN);
+      powers[0] = 0.0f;
+      for (int level = 1; level <= frequency.automatic_level_limit(hp1, 2); ++level) {
+        const auto prediction =
+            oq_perf::predict_candidate(frequency, frequency.performance_variant(hp1), hp1, level,
+                                       id(outside_temp_selected).state, target_c, allow_low_supply_boundary_estimate);
+        model_available |= prediction.runtime_frequency_known && prediction.performance.available;
+        if (prediction.usable_for_running_optimization()) powers[level] = prediction.performance.pth_w;
+      }
+    };
+    build_power(true, hp1_power, hp1_model_available);
+    build_power(false, hp2_power, hp2_model_available);
     const auto level_power_w = [&](bool hp1, int level) {
-      if (level <= 0) return 0.0f;
-      const auto prediction =
-          oq_perf::predict_candidate(frequency, frequency.performance_variant(hp1), hp1, level,
-                                     id(outside_temp_selected).state, target_c, allow_low_supply_boundary_estimate);
-      bool& model_available = hp1 ? hp1_model_available : hp2_model_available;
-      model_available |= prediction.runtime_frequency_known && prediction.performance.available;
-      return prediction.usable_for_running_optimization() ? prediction.performance.pth_w : NAN;
+      return level >= 0 && level <= level_cap ? (hp1 ? hp1_power : hp2_power)[level] : NAN;
+    };
+    const auto level_hz = [&](bool hp1, int level) {
+      return oq_odu::frequency_for_physical_level(frequency.snapshot(hp1).heating, level);
     };
     const auto maximum_level = [&](bool hp1) {
       if ((hp1 && !hp1_available) || (!hp1 && !hp2_available)) return 0;
-      for (int level = level_cap; level >= 1; --level) {
+      for (int level = frequency.automatic_level_limit(hp1, 2); level >= 1; --level) {
         const float power_w = level_power_w(hp1, level);
         if (std::isfinite(power_w) && power_w > 0.0f) return level;
       }
@@ -309,7 +324,7 @@ class Runtime {
                                          power_w,
                                          std::fabs(power_w - target_power_w),
                                          (candidate_hp1 > 0 ? 1 : 0) + (candidate_hp2 > 0 ? 1 : 0),
-                                         std::abs(candidate_hp1 - candidate_hp2)};
+                                         std::abs(level_hz(true, candidate_hp1) - level_hz(false, candidate_hp2))};
     };
 
     int single_owner = oq_curve::pick_single_owner(demand_active, id(oq_curve_single_owner_hp), previous_hp1 > 0,
@@ -322,10 +337,9 @@ class Runtime {
     const int hp2_max = maximum_level(false);
     const int owner_max = single_owner == 2 ? hp2_max : hp1_max;
     const float owner_capacity_w = level_power_w(single_owner != 2, owner_max);
-    float duo_capacity_w = 0.0f;
+    float duo_capacity_w = std::isfinite(owner_capacity_w) ? owner_capacity_w : 0.0f;
     for (int first = 1; first <= hp1_max; ++first)
       for (int second = 1; second <= hp2_max; ++second) {
-        if (std::abs(first - second) > 1) continue;
         const auto item = candidate(first, second, 0.0f);
         if (item.valid) duo_capacity_w = std::max(duo_capacity_w, item.power_w);
       }
@@ -343,7 +357,6 @@ class Runtime {
     if (demand_active)
       for (int first = 1; first <= hp1_max; ++first)
         for (int second = 1; second <= hp2_max; ++second) {
-          if (std::abs(first - second) > 1) continue;
           const auto item = candidate(first, second, target_power_w);
           if (oq_curve::better_dispatch_candidate(item, best_duo, previous_hp1, previous_hp2)) best_duo = item;
         }
@@ -358,8 +371,8 @@ class Runtime {
     constexpr float duo_disable_margin_w = 250.0f;
     const float duo_enable_min_u = heat_phase ? 0.90f : 0.80f;
     const float duo_disable_max_u = heat_phase ? 0.70f : 0.55f;
-    const bool single_saturated = best_single.valid && (best_single.hp1_level >= std::max(6, hp1_max - 1) ||
-                                                        best_single.hp2_level >= std::max(6, hp2_max - 1));
+    const bool single_saturated =
+        best_single.valid && owner_capacity_w > 0.0f && best_single.power_w >= 0.90f * owner_capacity_w;
     const bool duo_better =
         best_duo.valid && best_single.valid && best_duo.error_w + duo_enable_margin_w < best_single.error_w;
     const bool single_sufficient =
@@ -433,8 +446,37 @@ class Runtime {
                                          id(oq_dual_hp_emergency_hold_elapsed_accum_min), id(oq_curve_single_owner_hp),
                                          id(oq_duo_request_hold_until_ms), 1);
     owner = demand_active && hp1_available ? 1 : 0;
-    hp1_level =
-        hp1_available ? std::max(0, std::min(level_cap, static_cast<int>(std::lround(demand_u * level_cap)))) : 0;
+    std::array<float, level_cap + 1> powers{};
+    powers.fill(NAN);
+    const float target_c = this->effective_supply_target(id(oq_supply_target_temp).state);
+    float capacity_w = 0.0f;
+    bool model_available = false;
+    for (int level = 1; level <= frequency.automatic_level_limit(true, 2); ++level) {
+      const auto prediction =
+          oq_perf::predict_candidate(frequency, frequency.performance_variant(true), true, level,
+                                     id(outside_temp_selected).state, target_c, allow_low_supply_boundary_estimate);
+      model_available |= prediction.runtime_frequency_known && prediction.performance.available;
+      if (prediction.usable_for_running_optimization()) {
+        powers[level] = prediction.performance.pth_w;
+        capacity_w = std::max(capacity_w, powers[level]);
+      }
+    }
+    const float target_power_w = demand_u * capacity_w;
+    oq_curve::DispatchCandidate best;
+    if (demand_active && hp1_available) {
+      for (int level = 1; level <= frequency.automatic_level_limit(true, 2); ++level) {
+        if (!std::isfinite(powers[level])) continue;
+        const oq_curve::DispatchCandidate item{true, level, 0, powers[level], std::fabs(powers[level] - target_power_w),
+                                               1,    0};
+        if (oq_curve::better_dispatch_candidate(item, best, id(hp1_last_applied_level), 0)) best = item;
+      }
+      hp1_level = best.valid ? best.hp1_level : 0;
+      if (!model_available)
+        hp1_level =
+            oq_hp_candidate::preserve_active_topology_without_model(true, hp1_candidate, hp2_candidate).hp1_level;
+    }
+    id(oq_P_hp_cap_w) = capacity_w;
+    id(oq_P_deficit_w) = best.valid ? std::max(0.0f, target_power_w - best.power_w) : NAN;
     id(oq_curve_capacity_mode_code) = hp1_level > 0 ? 1 : 0;
 #endif
 
