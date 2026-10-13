@@ -21,6 +21,7 @@
 #include "../odu/oq_odu_compressor_levels.h"
 #include "../service/oq_service_status.h"
 #include "../service/tasks/oq_manual_hp_logic.h"
+#include "oq_compressor_command_runtime.h"
 
 #if defined(OQ_TOPOLOGY_DUO)
 namespace oq_thermal_actuator_runtime {
@@ -63,6 +64,7 @@ class Runtime {
   void tick(const TickConfig& config) {
     for (auto& limit : this->start_limits_) limit.expire(config.now_ms);
     this->last_minimum_flow_lph_ = config.minimum_flow_lph;
+    oq_command_runtime::minimum_defrost_flow_lph = config.minimum_flow_lph;
     const float cooling_off_state = id(cooling_minimum_off_time).state;
     int cooling_off_s = !isfinite(cooling_off_state) ? 600 : static_cast<int>(lroundf(cooling_off_state));
     const int cooling_off_floor_s = oq_cooling::cooling_minimum_off_floor_s(config.cooling_minimum_off_min_s);
@@ -253,7 +255,8 @@ class Runtime {
                           bool manual_service_active) const {
     if (id(oq_incident_manager).startup_inhibited(is_hp1 ? 1U : 2U)) return 0;
     int mode_code = active && request_thermal_active ? request_mode_code : 0;
-    if (manual_service_active && id(oq_manual_hp_mode_allowed)) {
+    // A selected manual mode is intent, not permission to energize an F0/blocked output.
+    if (active && manual_service_active && id(oq_manual_hp_mode_allowed)) {
       const int manual_mode = is_hp1 ? id(oq_manual_hp1_mode_code) : id(oq_manual_hp2_mode_code);
       if (manual_mode > 0) mode_code = manual_mode;
     }
@@ -274,7 +277,9 @@ class Runtime {
     if (is_hp1) {
       const auto index = id(hp1_compressor_level).active_index();
       const int current = index.has_value() ? static_cast<int>(index.value()) : -1;
-      if (current != physical_level || (physical_level == 0 && force_write)) {
+      if (current != physical_level || id(hp1_compressor_command_revalidation_required) ||
+          (physical_level == 0 && force_write)) {
+        id(hp1_compressor_command_revalidation_required) = false;
         auto call = id(hp1_compressor_level).make_call();
         call.set_option(level_options[physical_level]);
         if (physical_level > 0) id(oq_incident_manager).invalidate_restart_credit(1U);
@@ -286,7 +291,9 @@ class Runtime {
 #if OQ_TOPOLOGY_DUO
     const auto index = id(hp2_compressor_level).active_index();
     const int current = index.has_value() ? static_cast<int>(index.value()) : -1;
-    if (current != physical_level || (physical_level == 0 && force_write)) {
+    if (current != physical_level || id(hp2_compressor_command_revalidation_required) ||
+        (physical_level == 0 && force_write)) {
+      id(hp2_compressor_command_revalidation_required) = false;
       auto call = id(hp2_compressor_level).make_call();
       call.set_option(level_options[physical_level]);
       if (physical_level > 0) id(oq_incident_manager).invalidate_restart_credit(2U);
@@ -570,6 +577,15 @@ class Runtime {
       // verdict when the incident manager has withdrawn the HP's availability.
       const int policy_maximum = incident.available_for_start ? MAX_LEVEL : std::min(MAX_LEVEL, previous);
       applied = cycle.frequency.pick_allowed_level(is_hp1, expected_mode, applied, 1, policy_maximum);
+    }
+
+    if (applied > 0 && cycle.manual_service_active) {
+      applied = cycle.frequency.pick_temperature_level(is_hp1, expected_mode, applied);
+      if (applied == 0) {
+        block_reason = "temperature envelope blocks manual heating request";
+        candidate_reason = openquatt_decision_log::REASON_CANDIDATE_UNAVAILABLE;
+        this->service_guard_(cycle, is_hp1) = "temperatuurbegrenzing blokkeert handmatige verwarming";
+      }
     }
 
     oq_odu::LevelCommand command{};
@@ -874,7 +890,10 @@ class Runtime {
     auto* service = is_hp1 ? &id(hp1_odu_defrost) : &OQ_ACTUATOR_SECONDARY_ID(odu_defrost);
     if (!service->normal_write_allowed(std::strcmp(option, "Standby") == 0 ? 0 : 1, this->defrost_safety_stop_(is_hp1)))
       return;
-    force_write = force_write || service->cycle.phase == oq_defrost::Phase::RESYNC;
+    force_write = force_write ||
+                  (is_hp1 ? id(hp1_compressor_command_revalidation_required)
+                          : OQ_ACTUATOR_SECONDARY_ID(compressor_command_revalidation_required)) ||
+                  service->cycle.phase == oq_defrost::Phase::RESYNC;
     const bool active_mode = std::strcmp(option, "Cooling") == 0 || std::strcmp(option, "Heating") == 0;
     if (is_hp1) {
       if (force_write || id(hp1_set_working_mode).current_option() != option) {

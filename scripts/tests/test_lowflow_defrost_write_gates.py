@@ -11,6 +11,10 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
+try:
+    from .test_manual_hp_start_runtime import fixture_prefix
+except ImportError:
+    from test_manual_hp_start_runtime import fixture_prefix
 
 
 class LowflowDefrostWriteGatesTest(unittest.TestCase):
@@ -18,51 +22,18 @@ class LowflowDefrostWriteGatesTest(unittest.TestCase):
         source = (ROOT / "openquatt/oq_HP_io.yaml").read_text()
         lambdas = []
         for suffix in ("set_working_mode", "compressor_level"):
-            section = source[source.index("id: ${hp_id}_" + suffix):]
+            section = source[source.index("id: ${hp_id}_" + suffix + "\n"):]
             match = re.search(r"    write_lambda: \|-\n((?:      [^\n]*\n|\n)+)", section)
             self.assertIsNotNone(match, suffix)
             body = textwrap.dedent(match.group(1))
             lambdas.append(body.replace("${hp_id}", "hp1").replace("${hp_index}", "1"))
             lambdas.append(body.replace("${hp_id}", "hp2").replace("${hp_index}", "2"))
-        service = (ROOT / "components/openquatt_odu_defrost/OpenQuattOduDefrost.cpp").read_text()
-        permission = re.search(r"bool OpenQuattOduDefrost::normal_write_allowed\(.*?\n}", service, re.S)
-        self.assertIsNotNone(permission)
-        permission = permission.group().replace("OpenQuattOduDefrost::", "")
         runtime = (ROOT / "openquatt/includes/control/oq_thermal_actuator_runtime.h").read_text()
         safety = re.search(r"  bool defrost_safety_stop_\(.*?\n  }", runtime, re.S)
         self.assertIsNotNone(safety)
         gates = "\n".join("std::optional<int> gate%d(int value) {\n%s\n}" % (i, body)
                           for i, body in enumerate(lambdas))
-        unit = r'''
-#include <cassert>
-#include <optional>
-#include "openquatt/includes/control/oq_defrost_logic.h"
-#include "openquatt/includes/incidents/oq_hp_incident_engine.h"
-#define id(x) x
-#define OQ_ACTUATOR_SECONDARY_ID(x) hp2_##x
-uint32_t clock_ms=110000;
-uint32_t millis() { return clock_ms; }
-bool oq_water_temp_hard_trip_active=false, oq_lowflow_fault_active=false;
-struct Manager {
-  oq_incidents::HpIncidentEngine engines[2];
-  auto get_outputs(int index) const { return engines[index-1].outputs(); }
-} oq_incident_manager;
-struct Service {
-  oq_defrost::Cycle cycle;
-  bool loading_=false, trigger_ready_=false, save_after_load_=false, save_ready_=false;
-  bool save_writing_=false, save_verifying_=false;
-  int cleared=0;
-  Service* operator->() { return this; }
-  bool holding() const { return cycle.owns(); }
-  void clear_tx_queue_for_device() { ++cleared; }
-  void finish_profile_(bool) {}
-  void release() {}
-  // PERMISSION
-} hp1_odu_defrost, hp2_odu_defrost;
-struct Runtime {
-  // SAFETY
-} runtime;
-// GATES
+        main = r'''
 int main() {
   using Gate=std::optional<int> (*)(int);
   Gate gates[2][2]={{gate0,gate2},{gate1,gate3}};
@@ -74,16 +45,16 @@ int main() {
     service.cycle.observe_bit(true,clock_ms);
     service.cycle.step(clock_ms);
     assert(!runtime.defrost_safety_stop_(hp==0));
-    for (auto gate:gates[hp]) { assert(!gate(0)); assert(!gate(17)); }
+    for (auto gate:gates[hp]) { assert(!gate(0)); assert(!gate(17)); assert(!gate(2)); }
     // Initial global stop interrupts ownership but does not clear the ODU bit.
     oq_lowflow_fault_active=true;
     assert(runtime.defrost_safety_stop_(hp==0));
-    for (auto gate:gates[hp]) { assert(gate(0)==0); assert(!gate(17)); }
+    for (auto gate:gates[hp]) { assert(gate(0)==0); assert(!gate(17)); assert(!gate(2)); }
     assert(service.cycle.observed_active() && service.cycle.interrupted);
     oq_lowflow_fault_active=false;
     oq_water_temp_hard_trip_active=true;
     assert(runtime.defrost_safety_stop_(hp==0));
-    for (auto gate:gates[hp]) { assert(gate(0)==0); assert(!gate(17)); }
+    for (auto gate:gates[hp]) { assert(gate(0)==0); assert(!gate(17)); assert(!gate(2)); }
     assert(engine.request_stop(clock_ms));
     oq_water_temp_hard_trip_active=false;
     assert(engine.outputs().run_state==oq_incidents::RunState::STOPPING);
@@ -91,7 +62,7 @@ int main() {
     // Acknowledgements are lost; ordinary STOPPING remains authoritative.
     assert(runtime.defrost_safety_stop_(hp==0));
     assert(service.normal_write_allowed(0,runtime.defrost_safety_stop_(hp==0)));
-    for (auto gate:gates[hp]) { assert(gate(0)==0); assert(!gate(17)); }
+    for (auto gate:gates[hp]) { assert(gate(0)==0); assert(!gate(17)); assert(!gate(2)); }
     clock_ms+=10000;
     service.cycle.observe_mode(2,clock_ms); service.cycle.observe_bit(true,clock_ms);
     assert(!engine.request_stop(clock_ms));
@@ -101,19 +72,38 @@ int main() {
     assert(!engine.request_stop(clock_ms));
     assert(engine.outputs().run_state==oq_incidents::RunState::STOP_UNCONFIRMED);
     service.cycle.observe_mode(2,clock_ms); service.cycle.observe_bit(true,clock_ms);
-    for (auto gate:gates[hp]) { assert(gate(0)==0); assert(!gate(17)); }
+    for (auto gate:gates[hp]) { assert(gate(0)==0); assert(!gate(17)); assert(!gate(2)); }
     // With no pending stop/global fault, normal defrost hold remains intact.
     engine=oq_incidents::HpIncidentEngine{};
     service.cycle=oq_defrost::Cycle{};
     service.cycle.observe_mode(2,clock_ms); service.cycle.observe_bit(true,clock_ms);
     service.cycle.step(clock_ms);
     assert(!runtime.defrost_safety_stop_(hp==0));
-    for (auto gate:gates[hp]) { assert(!gate(0)); assert(!gate(17)); }
+    for (auto gate:gates[hp]) { assert(!gate(0)); assert(!gate(17)); assert(!gate(2)); }
     service.cycle.observe_bit(false,clock_ms); service.cycle.phase=oq_defrost::Phase::IDLE;
-    for (auto gate:gates[hp]) { assert(gate(0)==0); assert(gate(8)==8); }
+    auto& src=hp==0?oq_sources::hp1:oq_sources::hp2;
+    src.outside.observe(-15,clock_ms,true); src.water_in.observe(32.5,clock_ms,true);
+    (hp==0?hp1_compressor_level:hp2_compressor_level).selected=8;
+    for (auto gate:gates[hp]) assert(gate(0)==0);
+    assert(gates[hp][0](2)==2); assert(gates[hp][1](8)==8);
   }
 }
-'''.replace("// PERMISSION", permission).replace("// SAFETY", safety.group()).replace("// GATES", gates)
+'''
+        # Execute the unified production guarded_write, not a stand-in gate.
+        setup = """
+  hp_generation.option="V2";
+  hp1_is_online=hp2_is_online=true;
+  hp1_odu_generation_detection_complete=hp2_odu_generation_detection_complete=true;
+  hp1_generation_variant_code=hp2_generation_variant_code=static_cast<int>(oq_odu::Variant::V2_NEW_MODEL);
+  oq_day_max_frequency_hz.state=90;
+  oq_odu::RuntimeFrequencySnapshot snapshot;
+  snapshot.variant=oq_odu::Variant::V2_NEW_MODEL; snapshot.heating.valid=true; snapshot.heating.level_count=21;
+  snapshot.heating.hz={0,20,26,30,36,40,45,48,52,55,60,65,68,72,76,82,85,90,95,102,110};
+  hp1_runtime_frequency_snapshot_storage=hp2_runtime_frequency_snapshot_storage=oq_odu::encode_runtime_frequency_snapshot(snapshot);
+"""
+        main = main.replace("int main() {", "int main() {" + setup)
+        main = main.replace("auto& engine=", "oq_sources::hp1.outside.observe(-15,clock_ms,true); oq_sources::hp1.water_in.observe(32.5,clock_ms,true);\n    oq_sources::hp2.outside.observe(-15,clock_ms,true); oq_sources::hp2.water_in.observe(32.5,clock_ms,true);\n    auto& engine=")
+        unit = fixture_prefix(real_incidents=True) + "\n#define clock_ms test_now_ms\n#define OQ_ACTUATOR_SECONDARY_ID(x) hp2_##x\nstruct Runtime {\n" + safety.group() + "\n} runtime;\n" + gates + "\n" + main
         compiler = shutil.which("clang++") or shutil.which("g++")
         self.assertIsNotNone(compiler)
         args = [compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT)]
