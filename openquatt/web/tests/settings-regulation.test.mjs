@@ -845,8 +845,10 @@ test("Single toont één compacte draaitijd zonder Duo-balans", () => {
   assert.match(markup, /data-oq-action="open-runtime-reset-confirm"/);
 });
 
-test("runtime-reset kiest de beschikbare Duo-knop zonder klikfout", async () => {
+for (const topology of ["single", "duo"]) test(`runtime-reset volgt ${topology} bij achtergebleven knoppen van de andere topologie`, async () => {
   resetSettingsState({
+    installationTopology: { value: topology, state: topology },
+    resetRuntimeCountersHp1: { value: "", state: "" },
     resetRuntimeCountersHp1Hp2: { value: "", state: "" },
   });
   state.systemModal = "runtime-reset-confirm";
@@ -865,7 +867,9 @@ test("runtime-reset kiest de beschikbare Duo-knop zonder klikfout", async () => 
     assert.equal(state.controlError, "");
     assert.equal(state.systemModal, "");
     assert.equal(requests.length, 1);
-    assert.match(requests[0], /Reset%20Runtime%20Counters%20\(HP1%2BHP2\)\/press$/);
+    assert.match(requests[0], topology === "duo"
+      ? /Reset%20Runtime%20Counters%20\(HP1%2BHP2\)\/press$/
+      : /Reset%20Runtime%20Counters%20\(HP1\)\/press$/);
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.window.location = originalLocation;
