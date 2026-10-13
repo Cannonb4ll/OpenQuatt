@@ -48,7 +48,7 @@ class ThermalRequestRuntimeContractTest(unittest.TestCase):
             self.assertIn(marker, LOGIC)
             self.assertIn(marker, HOST_TEST)
         total = sum(len(source.splitlines()) for source in (YAML, LOGIC, RUNTIME, HOST_TEST))
-        self.assertLessEqual(total, 1720)
+        self.assertLessEqual(total, 1723)  # Includes the global-safety defrost hold guard.
 
 
 if __name__ == "__main__":
