@@ -11,24 +11,22 @@ int main() {
   assert(encode(0.0f) == 0 && encode(20.5f, 100.0f) == 2050);
   assert(encode(50000.0f) == 32767 && encode(-50000.0f) == -32767);
   Snapshot first;
-  first.reason = REASON_PH_COMFORT_STOP;
-  first.captured_ms = 1000;
+  assert(!begin_capture(first, 500, 0, true));
+  assert(!begin_capture(first, 500, REASON_PH_COMFORT_STOP, false));
+  assert(begin_capture(first, 1000, REASON_PH_COMFORT_STOP, true));
   first.room_c = 2050;
   first.room_stop_c = 2050;
   first.room_restart_c = 2030;
-  auto later = first;
-  later.captured_ms = 61000;
-  later.room_c = 2040;
-  later.room_stop_c = 2100;
-  const auto held = retain_first(first, later, true);
-  assert(held.held && held.captured_ms == 1000 && held.room_c == 2050 && held.room_stop_c == 2050);
-  assert(held.room_restart_c == 2030 && age_seconds(61000, held.captured_ms) == 60);
-  assert(retain_first(held, later, false).reason == 0);
+  assert(!begin_capture(first, 61000, REASON_PH_COMFORT_HOLD, true));
+  assert(first.reason == REASON_PH_COMFORT_HOLD && first.captured_ms == 1000 && first.room_c == 2050 &&
+         first.room_stop_c == 2050);
+  assert(first.room_restart_c == 2030 && age_seconds(61000, first.captured_ms) == 60);
   assert(comfort_reason(false) == REASON_PH_COMFORT_STOP && comfort_reason(true) == REASON_PH_COMFORT_HOLD);
   assert(age_seconds(1000, UINT32_MAX - 999) == 2);
   assert(age_seconds(100000000, 0) == UINT16_MAX);
-  later.reason = REASON_HEATING_INPUT_INVALID;
-  assert(retain_first(first, later, true).reason == REASON_HEATING_INPUT_INVALID);
+  assert(begin_capture(first, 62000, REASON_HEATING_INPUT_INVALID, true));
+  assert(first.reason == REASON_HEATING_INPUT_INVALID && first.room_c == UNKNOWN_VALUE);
+  assert(!begin_capture(first, 63000, REASON_PH_COMFORT_STOP, false) && first.reason == 0);
 
   CauseInput input;
   input.captured_reason = REASON_CURVE_LOW_LOAD;
@@ -64,8 +62,6 @@ int main() {
   input.central_reason = 37;
   assert(reason_for_stop(input) == 37);
   input.central_reason = 0;
-  assert(!low_load_resumed(false, false) && !low_load_resumed(false, true));
-  assert(!low_load_resumed(true, false) && low_load_resumed(true, true));
   assert(curve_single_reason(true, true) == REASON_HEATING_SINGLE_SUFFICIENT);
   assert(curve_single_reason(true, false) == REASON_HEATING_NO_CANDIDATE);
   assert(curve_single_reason(false, true) == REASON_HEATING_NO_CANDIDATE);

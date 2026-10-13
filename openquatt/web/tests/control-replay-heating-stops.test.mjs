@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { attachHeatingStopSnapshots, getHeatingStopCopy, getHeatingStopReasonMeta } from "../js/src/features/control-replay-heating-stops.js";
+import { attachHeatingStopSnapshots, getHeatingStopCopy, getHeatingStopReasonMeta, getHeatingStopSupportValues } from "../js/src/features/control-replay-heating-stops.js";
 import { setLocale } from "../js/src/i18n/index.js";
 import { loadReplayHarness } from "./helpers/replay-render-harness.mjs";
 
@@ -16,8 +16,11 @@ function records(reason = "ph_comfort_stop", subject = "HP1") {
     { ...common, seq: 13, event_type: "source_stop", flags: 32, value_a: 3, value_b: 0, threshold_a: 0 },
   ];
 }
+function stopEvent(reason) {
+  return attachHeatingStopSnapshots(records(reason)).at(-1);
+}
 function copy(reason) {
-  return getHeatingStopCopy(attachHeatingStopSnapshots(records(reason)).at(-1), "HP1");
+  return getHeatingStopCopy(stopEvent(reason), "HP1");
 }
 
 test("original decision, zero demand and actual restart threshold survive in NL and EN", () => {
@@ -26,9 +29,9 @@ test("original decision, zero demand and actual restart threshold survive in NL 
     const result = copy("ph_comfort_stop");
     assert.ok(result.title.includes("HP1"));
     assert.match(result.snapshotSummary, locale === "nl" ? /Kamer 20,50 °C.*stoppen bij 20,50 °C/ : /Room 20\.50 °C.*stop at 20\.50 °C/);
-    assert.match(result.supportValues.join(" "), /900 W.*0 W.*2[.,]500 W/);
+    assert.match(getHeatingStopSupportValues(stopEvent("ph_comfort_stop")).join(" "), /900 W.*0 W.*2[.,]500 W/);
     assert.match(result.next, locale === "nl" ? /20,30 °C/ : /20\.30 °C/);
-    assert.match(result.supportValues.join(" "), /60 s/);
+    assert.match(getHeatingStopSupportValues(stopEvent("ph_comfort_stop")).join(" "), /60 s/);
     assert.doesNotMatch(result.detail, /NaN|-32768/);
     assert.match(copy("ph_comfort_hold").title, locale === "nl" ? /was al warm genoeg/ : /was already warm enough/);
   }
@@ -51,9 +54,10 @@ test("low-load thresholds are watts and do not become temperatures", () => {
   setLocale("nl");
   const list = records("ph_low_load");
   list[2].threshold_a = 1600; list[2].value_b = 2200;
-  const result = getHeatingStopCopy(attachHeatingStopSnapshots(list).at(-1), "HP1");
+  const event = attachHeatingStopSnapshots(list).at(-1);
+  const result = getHeatingStopCopy(event, "HP1");
   assert.match(result.snapshotSummary, /0,0 kW.*1,6 kW/);
-  assert.match(result.supportValues.join(" "), /1\.600 W.*2\.200 W/);
+  assert.match(getHeatingStopSupportValues(event).join(" "), /1\.600 W.*2\.200 W/);
   assert.match(result.next, /2\.200 W/);
   assert.doesNotMatch(result.snapshotSummary, /16,00|22,00/);
 });
@@ -79,16 +83,29 @@ test("unknown is not zero, saturated values are explicit and every new reason ha
     setLocale(locale);
     for (const reason of codes) {
       assert.ok(getHeatingStopReasonMeta(reason));
-      const result = getHeatingStopCopy({ event_type: "source_stop", reason, flags: 32 }, "HP1");
+      const event = { event_type: "source_stop", reason, flags: 32 };
+      const result = getHeatingStopCopy(event, "HP1");
       assert.doesNotMatch(result.title + result.detail + result.next, /heatingStops\./);
-      assert.match(result.supportValues.join(" "), locale === "nl" ? /niet bewaard/ : /not recorded/);
+      assert.match(getHeatingStopSupportValues(event).join(" "), locale === "nl" ? /niet bewaard/ : /not recorded/);
       assert.equal(result.snapshotSummary, "");
       assert.doesNotMatch(result.title + result.summary + result.detail + result.next, /PID|telemetri|telemetry|broncombinatie|source combination|regelvraag|guardrail/);
     }
     const list = records(); list[0].value_a = null; list[0].value_b = 32767;
-    const result = getHeatingStopCopy(attachHeatingStopSnapshots(list).at(-1), "HP1");
-    assert.match(result.supportValues.join(" "), /— W.*≥ 32[.,]767 W/);
+    assert.match(getHeatingStopSupportValues(attachHeatingStopSnapshots(list).at(-1)).join(" "), /— W.*≥ 32[.,]767 W/);
   }
+});
+
+test("timeline copy defers full readings until support is requested and follows the current locale", () => {
+  setLocale("nl");
+  const event = stopEvent("ph_comfort_stop");
+  let reads = 0;
+  Object.defineProperty(event._oq_heating_stop_snapshot.power, "value_a", { get() { reads++; return 900; } });
+  assert.match(getHeatingStopCopy(event, "HP1").snapshotSummary, /20,50 °C/);
+  assert.equal(reads, 0);
+  assert.match(getHeatingStopSupportValues(event).join(" "), /Warmtevraag.*900 W/);
+  assert.ok(reads > 0);
+  setLocale("en");
+  assert.match(getHeatingStopSupportValues(event).join(" "), /Heat requested.*900 W/);
 });
 
 test("context records are hidden, cooling keeps its original meaning, timeline and details show snapshots", async () => {

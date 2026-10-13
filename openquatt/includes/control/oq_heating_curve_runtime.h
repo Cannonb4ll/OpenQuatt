@@ -83,29 +83,30 @@ class Runtime {
                                                  room_data_fresh, oil_return.mask_active, applied_total, demand_max_f},
                                                 tuning, previous);
     namespace stop = esphome::openquatt_decision_log::heating_stop;
-    stop::Snapshot stop_snapshot;
-    stop_snapshot.captured_ms = now_ms;
-    stop_snapshot.reason = stop::curve_demand_reason(demand.valid, static_cast<uint8_t>(demand.stop_reason));
-    stop_snapshot.room_c = room_data_fresh ? stop::encode(room_c, 100.0f) : stop::UNKNOWN_VALUE;
-    stop_snapshot.room_stop_c = room_data_fresh
-                                    ? stop::encode(room_setpoint_c + (demand.stop_reason == oq_curve::STOP_LOW_LOAD
-                                                                          ? -tuning.room_resume_heat_c
-                                                                          : tuning.room_overheat_off_c),
-                                                   100.0f)
-                                    : stop::UNKNOWN_VALUE;
-    stop_snapshot.room_restart_c =
-        room_data_fresh ? stop::encode(room_setpoint_c - tuning.room_resume_heat_c, 100.0f) : stop::UNKNOWN_VALUE;
-    stop_snapshot.supply_c = stop::encode(supply_c, 100.0f);
-    stop_snapshot.supply_stop_c =
-        demand.valid ? stop::encode(target_c + (demand.stop_reason == oq_curve::STOP_LOW_LOAD
-                                                    ? 0.25f
-                                                    : std::max(tuning.stop_delta_c, tuning.start_delta_c + 0.10f)),
-                                    100.0f)
-                     : stop::UNKNOWN_VALUE;
-    stop_snapshot.supply_restart_c =
-        demand.valid ? stop::encode(target_c - std::max(tuning.restart_delta_c, tuning.start_delta_c + 0.05f), 100.0f)
-                     : stop::UNKNOWN_VALUE;
-    this->stop_snapshot_ = stop::retain_first(this->stop_snapshot_, stop_snapshot, !demand.next.heat_request_active);
+    if (stop::begin_capture(this->stop_snapshot_, now_ms,
+                            stop::curve_demand_reason(demand.valid, static_cast<uint8_t>(demand.stop_reason)),
+                            !demand.next.heat_request_active)) {
+      auto& stop_snapshot = this->stop_snapshot_;
+      stop_snapshot.room_c = room_data_fresh ? stop::encode(room_c, 100.0f) : stop::UNKNOWN_VALUE;
+      stop_snapshot.room_stop_c = room_data_fresh
+                                      ? stop::encode(room_setpoint_c + (demand.stop_reason == oq_curve::STOP_LOW_LOAD
+                                                                            ? -tuning.room_resume_heat_c
+                                                                            : tuning.room_overheat_off_c),
+                                                     100.0f)
+                                      : stop::UNKNOWN_VALUE;
+      stop_snapshot.room_restart_c =
+          room_data_fresh ? stop::encode(room_setpoint_c - tuning.room_resume_heat_c, 100.0f) : stop::UNKNOWN_VALUE;
+      stop_snapshot.supply_c = stop::encode(supply_c, 100.0f);
+      stop_snapshot.supply_stop_c =
+          demand.valid ? stop::encode(target_c + (demand.stop_reason == oq_curve::STOP_LOW_LOAD
+                                                      ? 0.25f
+                                                      : std::max(tuning.stop_delta_c, tuning.start_delta_c + 0.10f)),
+                                      100.0f)
+                       : stop::UNKNOWN_VALUE;
+      stop_snapshot.supply_restart_c =
+          demand.valid ? stop::encode(target_c - std::max(tuning.restart_delta_c, tuning.start_delta_c + 0.05f), 100.0f)
+                       : stop::UNKNOWN_VALUE;
+    }
     id(oq_curve_oil_return_hold_until_ms) = oil_return.hold_until_ms;
     if (demand.valid)
       this->log_demand_transition_(now_ms, room_c, room_setpoint_c, oil_return.mask_active, tuning, previous, demand);

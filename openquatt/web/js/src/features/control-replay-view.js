@@ -1,5 +1,5 @@
 import { describeFrequencyLimit } from "./frequency-limits.js";
-import { attachHeatingStopSnapshots, getHeatingStopCopy, getHeatingStopReasonMeta } from "./control-replay-heating-stops.js";
+import { attachHeatingStopSnapshots, getHeatingStopCopy, getHeatingStopReasonMeta, getHeatingStopSupportValues } from "./control-replay-heating-stops.js";
 import { getEntityNumericValue, getEntityStateText, hasEntity, isEntityActive } from "../core/app-shared.js";
 import { renderOqIcon } from "../core/config.js";
 import { parseLooseNumber } from "../core/entity-store.js";
@@ -1756,7 +1756,6 @@ import { formatDate, formatNumber, formatTime, getIntlLocale, optionLabel, t } f
       summary: copy.summary,
       snapshotSummary: copy.snapshotSummary || "",
       heatingStop: Boolean(copy.heatingStop),
-      supportValues: copy.supportValues || [],
       detailTitle: t("controlReplay.evDetailWhy"),
       detail: copy.detail,
       next: copy.next,
@@ -2839,6 +2838,7 @@ import { formatDate, formatNumber, formatTime, getIntlLocale, optionLabel, t } f
     const optimizer = getControlWorkingOptimizerModel(item);
     const modeMetaLabel = getControlWorkingModeMetaLabel(item);
     const checks = Array.isArray(item.checks) ? item.checks : reason.checks;
+    const supportValues = item.heatingStop ? getHeatingStopSupportValues(item.rawDecisionEvent) : [];
     return `
       <aside class="oq-working-detail oq-working-detail--${escapeHtml(status.tone)}">
         <div>
@@ -2876,7 +2876,7 @@ import { formatDate, formatNumber, formatTime, getIntlLocale, optionLabel, t } f
         </div>`}
         <details class="oq-working-support" data-replay-support-item="${escapeHtml(item.id)}"${state.controlReplaySupportDetailsItemId === item.id ? " open" : ""}>
           <summary data-oq-action="toggle-control-replay-support-details">${t("controlReplay.detailSupport")}</summary>
-          ${(item.supportValues || []).map((value) => `<p>${escapeHtml(value)}</p>`).join("")}
+          ${supportValues.map((value) => `<p>${escapeHtml(value)}</p>`).join("")}
           <dl>
             <div><dt>${t("controlReplay.detailRecord")}</dt><dd>${escapeHtml(getControlWorkingKindLabel(item.kind))}</dd></div>
             <div><dt>${t("controlReplay.detailSource")}</dt><dd>${escapeHtml(item.source)}</dd></div>

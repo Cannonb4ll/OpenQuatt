@@ -1,7 +1,7 @@
 import { formatNumber, t } from "../i18n/index.js";
 
 const reasons = {
-  heating_request_cleared: ["heatingStops.requestEnded", "heatingStops.requestEndedCopy", "heatingStops.curveNext"],
+  heating_request_cleared: ["heatingStops.demandZero", "heatingStops.requestEndedCopy", "heatingStops.curveNext"],
   supervisory_override: ["heatingStops.override", "heatingStops.overrideCopy", "heatingStops.centralNext"],
   frost_protection: ["controlReplay.reasonFrost", "controlReplay.reasonFrostCopy", "heatingStops.centralNext"],
   heating_central_pause: ["heatingStops.central", "heatingStops.centralCopy", "heatingStops.centralNext"],
@@ -10,7 +10,7 @@ const reasons = {
   ph_comfort_stop: ["heatingStops.comfort", "heatingStops.comfortCopy", "heatingStops.comfortNext"],
   ph_comfort_hold: ["heatingStops.comfortHold", "heatingStops.comfortHoldCopy", "heatingStops.comfortNext"],
   curve_water_stop: ["heatingStops.water", "heatingStops.waterCopy", "heatingStops.curveNext"],
-  curve_low_load: ["heatingStops.curveLow", "heatingStops.curveLowCopy", "heatingStops.curveNext"],
+  curve_low_load: ["heatingStops.lowLoad", "heatingStops.curveLowCopy", "heatingStops.curveNext"],
   heating_input_invalid: ["heatingStops.invalid", "heatingStops.invalidCopy", "heatingStops.validNext"],
   heating_single_sufficient: ["heatingStops.single", "heatingStops.singleCopy", "heatingStops.singleNext"],
   heating_electrical_limit: ["heatingStops.electrical", "heatingStops.electricalCopy", "heatingStops.electricalNext"],
@@ -42,19 +42,20 @@ export function attachHeatingStopSnapshots(events) {
   });
 }
 
+function hasValue(value) {
+  return typeof value === "number" && Number.isInteger(value) && value >= -32767 && value <= 32767;
+}
+
 function snapshotValue(value, decimals, scale = 1) {
-  return typeof value === "number" && Number.isInteger(value) && value >= -32767 && value <= 32767
+  return hasValue(value)
     ? `${value === 32767 ? "≥ " : value === -32767 ? "≤ " : ""}${formatNumber(value / scale, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}` : "—";
 }
 
-export function getHeatingStopCopy(event, subject) {
-  if (["heating_request_cleared", "supervisory_override", "frost_protection"].includes(event.reason) && !(Number(event.flags) & 32)) return null;
-  const keys = event.event_type === "source_stop" && reasons[event.reason];
-  if (!keys) return null;
-  const snapshot = event._oq_heating_stop_snapshot;
-  const lowLoad = event.reason === "ph_low_load";
-  const hasValue = (value) => typeof value === "number" && Number.isInteger(value) && value >= -32767 && value <= 32767;
-  const supportValues = snapshot ? [
+// Format the full readings only for the selected stop, not every timeline row.
+export function getHeatingStopSupportValues(event) {
+  const snapshot = event?._oq_heating_stop_snapshot;
+  if (!snapshot) return [t("heatingStops.missing")];
+  return [
     hasValue(snapshot.power.value_a) || hasValue(snapshot.power.value_b) ? t("heatingStops.powerValues", {
       base: snapshotValue(snapshot.power.value_a, 0), effective: snapshotValue(snapshot.power.value_b, 0),
       thermal: snapshotValue(snapshot.power.threshold_a, 0),
@@ -63,13 +64,22 @@ export function getHeatingStopCopy(event, subject) {
       room: snapshotValue(snapshot.room.value_a, 2, 100), stop: snapshotValue(snapshot.room.threshold_a, 2, 100),
       restart: snapshotValue(snapshot.room.value_b, 2, 100),
     }) : "",
-    lowLoad ? t("heatingStops.lowLoadValues", {
+    event.reason === "ph_low_load" ? t("heatingStops.lowLoadValues", {
       stop: snapshotValue(snapshot.water.threshold_a, 0), restart: snapshotValue(snapshot.water.value_b, 0),
     }) : [snapshot.water.value_a, snapshot.water.value_b, snapshot.water.threshold_a].some(hasValue) ? t("heatingStops.waterValues", {
       water: snapshotValue(snapshot.water.value_a, 2, 100), stop: snapshotValue(snapshot.water.threshold_a, 2, 100),
       restart: snapshotValue(snapshot.water.value_b, 2, 100),
     }) : "",
-  ].filter(Boolean) : [];
+    t("heatingStops.age", { seconds: snapshot.power.duration_s }),
+  ].filter(Boolean);
+}
+
+export function getHeatingStopCopy(event, subject) {
+  if (["heating_request_cleared", "supervisory_override", "frost_protection"].includes(event.reason) && !(Number(event.flags) & 32)) return null;
+  const keys = event.event_type === "source_stop" && reasons[event.reason];
+  if (!keys) return null;
+  const snapshot = event._oq_heating_stop_snapshot;
+  const lowLoad = event.reason === "ph_low_load";
   let snapshotSummary = "";
   if (snapshot) {
     const powerValue = (value) => Math.abs(value) === 32767 ? `${snapshotValue(value, 0)} W` : `${snapshotValue(value, 1, 1000)} kW`;
@@ -98,6 +108,5 @@ export function getHeatingStopCopy(event, subject) {
     title: t("heatingStops.title", { subject, reason: t(keys[0]) }), summary,
     reasonLabel: t(keys[0]), reasonSummary: summary,
     detail: t("heatingStops.residual"), next, checks: [], snapshotSummary, heatingStop: true,
-    supportValues: [...supportValues, snapshot ? t("heatingStops.age", { seconds: snapshot.power.duration_s }) : t("heatingStops.missing")],
   };
 }

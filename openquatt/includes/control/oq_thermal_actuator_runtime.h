@@ -970,53 +970,47 @@ class Runtime {
       const bool curve = id(oq_heat_mode_code) == 1;
       auto snapshot = curve ? oq_heating_curve_runtime::runtime().stop_snapshot()
                             : oq_power_house_runtime::runtime().stop_snapshot();
-      if (snapshot.reason == 0) {
-        snapshot = {};
-        snapshot.captured_ms = now_ms;
-        snapshot.room_c = stop::encode(id(room_temp_selected).state, 100.0f);
-        snapshot.supply_c = stop::encode(id(oq_system_supply_temp).state, 100.0f);
-        if (!curve) {
-          snapshot.base_w = stop::encode(oq_power_house_runtime::runtime().run_extension_base_w());
-          snapshot.effective_w = stop::encode(id(oq_strategy_requested_power_w));
-        }
-      }
       auto* defrost = is_hp1 ? &id(hp1_odu_defrost) : &OQ_ACTUATOR_SECONDARY_ID(odu_defrost);
       const bool source_unavailable =
           id(oq_incident_manager).get_outputs(is_hp1 ? 1U : 2U).must_stop || defrost->cycle.telemetry_fault(now_ms);
       const bool water_limit = id(oq_water_temp_hard_trip_active) || id(oq_water_temp_limit_factor) <= 0.0f;
       const bool disabled =
           !id(oq_enabled).state || !id(heating_enable_valid).state || !id(heating_enable_selected).state;
-      const uint8_t captured_reason = snapshot.held && snapshot.reason == openquatt_decision_log::REASON_PH_COMFORT_STOP
-                                          ? static_cast<uint8_t>(openquatt_decision_log::REASON_PH_COMFORT_HOLD)
-                                          : snapshot.reason;
       uint8_t central_reason = oq_supervisory_state_runtime::runtime().heating_gate_reason();
       const bool central_pause = id(oq_control_mode_code) != 2 && id(oq_control_mode_code) != 3;
-      if (central_reason == 0 && central_pause && id(oq_strategy_heat_request_active) &&
-          !(snapshot.reason != 0 || (!curve && !id(oq_lowload_heat_latch))))
+      if (central_reason == 0 && central_pause && id(oq_strategy_heat_request_active) && snapshot.reason == 0 &&
+          (curve || id(oq_lowload_heat_latch)))
         central_reason = openquatt_decision_log::REASON_HEATING_CENTRAL_PAUSE;
       reason = stop::reason_for_stop(
           {source_unavailable, id(oq_lowflow_fault_active), water_limit, disabled, id(oq_strategy_heat_request_active),
            curve, !curve && !id(oq_lowload_heat_latch), id(oq_power_cap_f) <= 0 && id(oq_demand_raw) > 0,
-           curve && (is_hp1 ? id(oq_curve_dispatch_hp2_level) : id(oq_curve_dispatch_hp1_level)) > 0, captured_reason,
+           curve && (is_hp1 ? id(oq_curve_dispatch_hp2_level) : id(oq_curve_dispatch_hp1_level)) > 0, snapshot.reason,
            curve ? oq_heating_curve_runtime::runtime().dispatch_stop_reason()
                  : static_cast<uint8_t>(id(oq_ph_request_reason_code)),
            central_reason});
       // A later safety cause supersedes the pending comfort/demand decision.
       // Its snapshot must not carry the old decision's temperatures or limits.
-      if ((source_unavailable || disabled || id(oq_lowflow_fault_active) || water_limit || central_reason != 0) &&
-          snapshot.reason != reason) {
+      const bool superseded =
+          (source_unavailable || disabled || id(oq_lowflow_fault_active) || water_limit || central_reason != 0) &&
+          snapshot.reason != reason;
+      if (snapshot.reason == 0 || superseded) {
         snapshot = {};
         snapshot.captured_ms = now_ms;
         snapshot.room_c = stop::encode(id(room_temp_selected).state, 100.0f);
         snapshot.supply_c = stop::encode(id(oq_system_supply_temp).state, 100.0f);
+        if (!curve && !superseded) {
+          snapshot.base_w = stop::encode(oq_power_house_runtime::runtime().run_extension_base_w());
+          snapshot.effective_w = stop::encode(id(oq_strategy_requested_power_w));
+        }
       }
       const uint8_t subject = is_hp1 ? openquatt_decision_log::SUBJECT_HP1 : openquatt_decision_log::SUBJECT_HP2;
+      const uint16_t age_s = stop::age_seconds(now_ms, snapshot.captured_ms);
       const auto context = [&](uint8_t kind, int16_t a, int16_t b, int16_t threshold) {
         id(oq_decision_log)
             .emit(openquatt_decision_log::EVENT_HEATING_STOP_CONTEXT, subject, reason,
                   openquatt_decision_log::SEVERITY_NORMAL, static_cast<uint8_t>(id(oq_control_mode_code)),
-                  openquatt_decision_log::STATE_ACTIVE, openquatt_decision_log::STATE_IDLE, a, b, threshold,
-                  stop::age_seconds(now_ms, snapshot.captured_ms), kind);
+                  openquatt_decision_log::STATE_ACTIVE, openquatt_decision_log::STATE_IDLE, a, b, threshold, age_s,
+                  kind);
       };
       const float measured_w = is_hp1 ? id(hp1_heat_power).state : OQ_ACTUATOR_SECONDARY_ID(heat_power).state;
       context(stop::POWER, snapshot.base_w, snapshot.effective_w, stop::encode(measured_w));

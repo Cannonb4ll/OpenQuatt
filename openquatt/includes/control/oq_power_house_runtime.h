@@ -407,25 +407,25 @@ class Runtime {
     id(oq_strategy_supply_target_temp) = NAN;
     id(oq_strategy_heat_request_active) = capped_demand > 0;
     namespace stop = esphome::openquatt_decision_log::heating_stop;
-    stop::Snapshot stop_snapshot;
-    stop_snapshot.captured_ms = now_ms;
-    stop_snapshot.reason =
+    const uint8_t stop_reason =
         !demand.valid                            ? esphome::openquatt_decision_log::REASON_HEATING_INPUT_INVALID
         : id(oq_water_temp_limit_factor) <= 0.0f ? esphome::openquatt_decision_log::REASON_HEATING_WATER_LIMIT
         : run_ext_decision.force_comfort_stop    ? stop::comfort_reason(comfort_was_active)
         : raw_demand > 0 && capped_demand <= 0   ? esphome::openquatt_decision_log::REASON_HEATING_ELECTRICAL_LIMIT
                                                  : esphome::openquatt_decision_log::REASON_PH_DEMAND_ZERO;
-    stop_snapshot.base_w = demand.valid ? stop::encode(base_requested_w) : stop::UNKNOWN_VALUE;
-    stop_snapshot.effective_w = demand.valid ? stop::encode(requested_w) : stop::UNKNOWN_VALUE;
-    stop_snapshot.room_c = room_inputs_valid ? stop::encode(room_c, 100.0f) : stop::UNKNOWN_VALUE;
-    if (run_ext_decision.force_comfort_stop) {
-      stop_snapshot.room_stop_c = stop::encode(run_ext_decision.comfort_stop_c, 100.0f);
-      stop_snapshot.room_restart_c = stop::encode(run_ext_decision.warm_restart_c, 100.0f);
+    if ((capped_demand <= 0 || this->stop_snapshot_.reason != esphome::openquatt_decision_log::REASON_PH_LOW_LOAD) &&
+        stop::begin_capture(this->stop_snapshot_, now_ms, stop_reason, capped_demand <= 0)) {
+      auto& stop_snapshot = this->stop_snapshot_;
+      stop_snapshot.base_w = demand.valid ? stop::encode(base_requested_w) : stop::UNKNOWN_VALUE;
+      stop_snapshot.effective_w = demand.valid ? stop::encode(requested_w) : stop::UNKNOWN_VALUE;
+      stop_snapshot.room_c = room_inputs_valid ? stop::encode(room_c, 100.0f) : stop::UNKNOWN_VALUE;
+      if (run_ext_decision.force_comfort_stop) {
+        stop_snapshot.room_stop_c = stop::encode(run_ext_decision.comfort_stop_c, 100.0f);
+        stop_snapshot.room_restart_c = stop::encode(run_ext_decision.warm_restart_c, 100.0f);
+      }
+      if (stop_reason == esphome::openquatt_decision_log::REASON_HEATING_WATER_LIMIT)
+        stop_snapshot.supply_c = stop::encode(id(oq_system_supply_temp).state, 100.0f);
     }
-    if (stop_snapshot.reason == esphome::openquatt_decision_log::REASON_HEATING_WATER_LIMIT)
-      stop_snapshot.supply_c = stop::encode(id(oq_system_supply_temp).state, 100.0f);
-    if (capped_demand <= 0 || this->stop_snapshot_.reason != esphome::openquatt_decision_log::REASON_PH_LOW_LOAD)
-      this->stop_snapshot_ = stop::retain_first(this->stop_snapshot_, stop_snapshot, capped_demand <= 0);
     id(oq_strategy_hp_expected_power_w) = dispatch.expected_w;
     id(oq_strategy_hp_max_power_w) = dispatch.capacity_w;
     id(oq_strategy_hp_saturated) = house_saturated;
@@ -482,17 +482,15 @@ class Runtime {
   const esphome::openquatt_decision_log::heating_stop::Snapshot& stop_snapshot() const { return this->stop_snapshot_; }
   void record_low_load_stop(uint32_t now_ms, bool raw_request, bool latched, float power_w, float off_w, float on_w) {
     namespace stop = esphome::openquatt_decision_log::heating_stop;
-    if (raw_request && !latched) {
-      stop::Snapshot current;
-      current.captured_ms = now_ms;
-      current.reason = esphome::openquatt_decision_log::REASON_PH_LOW_LOAD;
+    if (raw_request && !latched &&
+        stop::begin_capture(this->stop_snapshot_, now_ms, esphome::openquatt_decision_log::REASON_PH_LOW_LOAD, true)) {
+      auto& current = this->stop_snapshot_;
       current.base_w = stop::encode(this->run_ext_base_w_);
       current.effective_w = stop::encode(power_w);
       // For low-load stops the WATER record carries watt thresholds, not temperatures.
       current.supply_stop_c = stop::encode(off_w);
       current.supply_restart_c = stop::encode(on_w);
-      this->stop_snapshot_ = stop::retain_first(this->stop_snapshot_, current, true);
-    } else if (stop::low_load_resumed(raw_request, latched) &&
+    } else if (raw_request && latched &&
                this->stop_snapshot_.reason == esphome::openquatt_decision_log::REASON_PH_LOW_LOAD) {
       this->stop_snapshot_ = {};
     }

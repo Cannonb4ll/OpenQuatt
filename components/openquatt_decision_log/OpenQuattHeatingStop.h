@@ -43,18 +43,26 @@ struct Snapshot {
   int16_t room_c{UNKNOWN_VALUE}, room_stop_c{UNKNOWN_VALUE}, room_restart_c{UNKNOWN_VALUE};
   int16_t supply_c{UNKNOWN_VALUE}, supply_stop_c{UNKNOWN_VALUE}, supply_restart_c{UNKNOWN_VALUE};
   uint8_t reason{0};
-  bool held{false};
 };
 static_assert(sizeof(Snapshot) <= 24, "Heating stop snapshots must remain bounded");
 
 // A pending stop can wait for minimum runtime/defrost. Retain the first decision,
 // including its thresholds, until the strategy requests heat again.
-inline Snapshot retain_first(Snapshot previous, Snapshot current, bool stopping) {
-  if (!stopping) return {};
-  if (current.reason == REASON_HEATING_INPUT_INVALID) return current;
-  if (previous.reason == 0) return current;
-  if (previous.reason == REASON_PH_COMFORT_STOP || previous.reason == REASON_PH_COMFORT_HOLD) previous.held = true;
-  return previous;
+// Only encode readings when a new decision needs them; held stops retain theirs.
+inline bool begin_capture(Snapshot& snapshot, uint32_t now_ms, uint8_t reason, bool stopping) {
+  if (!stopping) {
+    snapshot = {};
+    return false;
+  }
+  if (snapshot.reason == 0 || reason == REASON_HEATING_INPUT_INVALID) {
+    if (reason == 0) return false;
+    snapshot = {};
+    snapshot.captured_ms = now_ms;
+    snapshot.reason = reason;
+    return true;
+  }
+  if (snapshot.reason == REASON_PH_COMFORT_STOP) snapshot.reason = REASON_PH_COMFORT_HOLD;
+  return false;
 }
 
 inline uint8_t comfort_reason(bool already_stopping) {
@@ -86,10 +94,8 @@ inline uint8_t reason_for_stop(const CauseInput& in) {
   if (in.dispatch_reason == 11) return REASON_HEATING_NO_CANDIDATE;
   if (in.dispatch_reason == 9) return REASON_HEATING_ELECTRICAL_LIMIT;
   if (in.dispatch_reason == 10 || in.dispatch_reason == 8) return REASON_HEATING_OPTIMIZER;
-  return in.request_active ? REASON_HEATING_NO_CANDIDATE : REASON_PH_DEMAND_ZERO;
+  return REASON_HEATING_NO_CANDIDATE;
 }
-
-inline bool low_load_resumed(bool raw_request, bool latched) { return raw_request && latched; }
 
 inline uint8_t curve_demand_reason(bool valid, uint8_t stop_reason) {
   if (!valid) return REASON_HEATING_INPUT_INVALID;
