@@ -7,7 +7,7 @@ globalThis.__OQ_PREVIEW__ = false;
 globalThis.window = { localStorage: { getItem: () => null } };
 globalThis.document = { activeElement: null };
 const { state } = await import("../js/src/core/state.js");
-const { setLocale } = await import("../js/src/i18n/index.js");
+const { setLocale, t } = await import("../js/src/i18n/index.js");
 const { getInstallationTopology } = await import("../js/src/features/device-context.js");
 const { getInstallationMonitoringModel } = await import("../js/src/core/installation-monitoring.js");
 const { getSettingsServiceModel, renderHpWaterCalibrationWizard, renderSettingsCounterServiceSection } = await import("../js/src/settings/service.js");
@@ -29,7 +29,7 @@ installationSource = installationSource.replace(
 ).replace(/(from\s+["'])(\.[^"']+)(["'])/g, (_, before, path, after) => `${before}${new URL(path, installationUrl).href}${after}`);
 const { renderSettingsInstallationMonitoringSection } = await import(`data:text/javascript;base64,${Buffer.from(installationSource).toString("base64")}`);
 const replaySource = await readFile(new URL("../js/src/features/control-replay-view.js", import.meta.url), "utf8");
-const replay = await loadReplayHarness(`${replaySource}\nexport { getControlWorkingCurrent, getControlWorkingOptimizerModel };`);
+const replay = await loadReplayHarness(`${replaySource}\nexport { getControlWorkingCurrent, getControlWorkingOptimizerModel, renderControlWorkingDetails };`);
 const initialState = structuredClone(state);
 const entity = (value, extra = {}) => ({ value, state: String(value), ...extra });
 const select = (value, options) => entity(value, { options });
@@ -190,6 +190,33 @@ test("historical HP2 source events stay visible after switching to Single", () =
   assert.match(replay.getDecisionEventCopy(event).title, /HP2/);
   const optimizer = replay.getControlWorkingOptimizerModel({ reasonCode: "runtime_lead", source: "HP2" });
   assert.ok(optimizer.rows.some(({ option, tone }) => option === "HP2" && tone === "selected"));
+});
+
+test("Single replay demand transitions omit two-pump options in both languages while Duo and historical HP2 retain them", () => {
+  for (const locale of ["nl", "en"]) {
+    setLocale(locale);
+    for (const reasonCode of ["less_power", "demand_decreased"]) {
+      const item = { reasonCode, source: "HP1", kind: "event", severity: "normal" };
+      const model = replay.getControlWorkingOptimizerModel(item);
+      assert.deepEqual(model.rows.map(({ option }) => option), ["HP1"]);
+      assert.doesNotMatch(replay.renderControlWorkingDetails(item), /Twee warmtepompen|Two heat pumps/);
+
+      const historical = replay.getControlWorkingOptimizerModel({ ...item, source: "HP2" });
+      assert.equal(historical.rows[0].option, t("controlReplay.optTwoHp"));
+      setup("duo");
+      const duo = replay.getControlWorkingOptimizerModel(item);
+      assert.equal(duo.rows[0].option, t("controlReplay.optTwoHp"));
+      assert.deepEqual(replay.getControlWorkingOptimizerModel({ ...item, hp2Available: false }).rows.map(({ option }) => option), ["HP1"]);
+      setup("single");
+    }
+    assert.equal(replay.getControlWorkingOptimizerModel({ reasonCode: "better_heat", source: "HP1" }), null);
+    assert.equal(replay.getControlWorkingOptimizerModel({ reasonCode: "better_heat", source: "HP1 + HP2" }).rows.length, 3);
+    assert.equal(replay.getControlWorkingOptimizerModel({ reasonCode: "boiler_assist", source: "HP1" }).rows[0].option, t("controlReplay.optOneHp"));
+    setup("duo");
+    assert.equal(replay.getControlWorkingOptimizerModel({ reasonCode: "better_heat", source: "HP1" }).rows.length, 3);
+    assert.equal(replay.getControlWorkingOptimizerModel({ reasonCode: "boiler_assist", source: "HP1" }).rows[0].option, t("controlReplay.optOnlyHps"));
+    setup("single");
+  }
 });
 
 test("legacy topology inference accepts real HP2 hints but not shared dummy HP2 counters", () => {

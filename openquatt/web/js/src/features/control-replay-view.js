@@ -578,7 +578,7 @@ import { formatDate, formatNumber, formatTime, getIntlLocale, optionLabel, t } f
     const reasonCode = target?.reasonCode || target?.primaryReason || "keep_current";
     const hasHp2 = target?.hp2Available ?? (getInstallationTopology() === "duo" || String(target?.source || "").includes("HP2"));
     const source = target?.source || (hasHp2 ? "HP1 + HP2" : "HP1");
-    if (reasonCode === "better_heat") {
+    if (hasHp2 && reasonCode === "better_heat") {
       return {
         title: t("controlReplay.optSystemChoice"),
         verdict: t("controlReplay.optTwoHpActive"),
@@ -596,7 +596,7 @@ import { formatDate, formatNumber, formatTime, getIntlLocale, optionLabel, t } f
         verdict: t("controlReplay.optOneHpEnough"),
         summary: t("controlReplay.optOneHpEnoughCopy"),
         rows: [
-          { option: t("controlReplay.optTwoHp"), result: t("controlReplay.optNoLongerNeeded"), code: "less_power", detail: t("controlReplay.optTogetherTooMuch"), tone: "muted" },
+          ...(hasHp2 ? [{ option: t("controlReplay.optTwoHp"), result: t("controlReplay.optNoLongerNeeded"), code: "less_power", detail: t("controlReplay.optTogetherTooMuch"), tone: "muted" }] : []),
           { option: source, result: t("controlReplay.optStaysActive"), code: "less_power", detail: t("controlReplay.optOneHpCovers"), tone: "selected" },
         ],
       };
@@ -670,7 +670,7 @@ import { formatDate, formatNumber, formatTime, getIntlLocale, optionLabel, t } f
         verdict: t("controlReplay.optBoilerSupports"),
         summary: t("controlReplay.optBoilerBase"),
         rows: [
-          { option: t("controlReplay.optOnlyHps"), result: t("controlReplay.optTooLittleReserve"), code: "better_heat", detail: t("controlReplay.optDemandHigh"), tone: "muted" },
+          { option: t(hasHp2 ? "controlReplay.optOnlyHps" : "controlReplay.optOneHp"), result: t("controlReplay.optTooLittleReserve"), code: "better_heat", detail: t("controlReplay.optDemandHigh"), tone: "muted" },
           { option: t("controlReplay.optBoiler"), result: t("controlReplay.optTempExtra"), code: "boiler_assist", detail: t("controlReplay.optBoilerExtra"), tone: "selected" },
           { option: t("controlReplay.optAfterPeak"), result: t("controlReplay.optBackToHp"), code: "less_power", detail: t("controlReplay.optHpTakeOver"), tone: "muted" },
         ],

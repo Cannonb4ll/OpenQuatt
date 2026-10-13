@@ -6,7 +6,7 @@ import { formatSettingsNumberValue, getCommissioningStatusValue, getSettingsStat
 import { getHpWaterRawValue } from "./water.js";
 import { escapeHtml } from "../core/html.js";
 import { renderModalShell } from "../core/modal-shell.js";
-import { getInstallationTopology } from "../features/device-context.js";
+import { getInstallationTopology, getRuntimeCounterResetKey } from "../features/device-context.js";
 import { formatNumber, t } from "../i18n/index.js";
 
   export function getManualHpActualValue(levelKey, frequencyKey) {
@@ -1138,9 +1138,7 @@ import { formatNumber, t } from "../i18n/index.js";
   }
 
   export function renderSettingsCounterServiceSection() {
-    const runtimeResetKey = getInstallationTopology() === "duo" && hasEntity("resetRuntimeCountersHp1Hp2")
-      ? "resetRuntimeCountersHp1Hp2"
-      : hasEntity("resetRuntimeCountersHp1") ? "resetRuntimeCountersHp1" : "";
+    const runtimeResetKey = getRuntimeCounterResetKey();
     const hasHp1Runtime = hasEntity("hp1RuntimeHours");
     const hasHp2Runtime = getInstallationTopology() === "duo" && hasEntity("hp2RuntimeHours");
     const hp1Hours = getEntityNumericValue("hp1RuntimeHours");
