@@ -222,7 +222,7 @@ class Runtime {
       const bool allow_low_supply_boundary_estimate = id(oq_cold_start_session_active) && !id(oq_cold_start_hp_blocked);
       const auto include_minimum = [&](bool hp1, const oq_hp_candidate::HpCandidateState& candidate) {
         if (!oq_hp_candidate::may_serve_candidate(candidate)) return;
-        for (int level = 1; level <= 10; ++level) {
+        for (int level = 1; level <= frequency.automatic_level_limit(hp1, 2); ++level) {
           const auto prediction = oq_perf::predict_candidate(frequency, frequency.performance_variant(hp1), hp1, level,
                                                              outside_c, supply_c, allow_low_supply_boundary_estimate);
           if (!prediction.usable_for_running_optimization()) continue;

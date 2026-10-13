@@ -7,6 +7,7 @@ import { getCoolingStartBlockModel } from "../settings/cooling.js";
 import { escapeHtml } from "../core/html.js";
 import { getRenderSignature } from "../core/render-signatures.js";
 import { state } from "../core/state.js";
+import { getInstallationTopology } from "./device-context.js";
 import { setViewPatchControls } from "../core/view-patch-controls.js";
 import { getControlReplayIncidentDisplaySeverity, getControlReplayIncidentEventCopy, getControlReplayIncidentModeAfterEvent, getControlReplayIncidentModeTransition, getControlReplayIncidentReasonMeta } from "./control-replay-incidents.js";
 import { formatWorkingMode, getHeatPumpPanels } from "../views/heatpump.js";
@@ -577,8 +578,9 @@ import { formatDate, formatNumber, formatTime, getIntlLocale, optionLabel, t } f
 
   function getControlWorkingOptimizerModel(target) {
     const reasonCode = target?.reasonCode || target?.primaryReason || "keep_current";
-    const source = target?.source || "HP1 + HP2";
-    if (reasonCode === "better_heat") {
+    const hasHp2 = target?.hp2Available ?? (getInstallationTopology() === "duo" || String(target?.source || "").includes("HP2"));
+    const source = target?.source || (hasHp2 ? "HP1 + HP2" : "HP1");
+    if (hasHp2 && reasonCode === "better_heat") {
       return {
         title: t("controlReplay.optSystemChoice"),
         verdict: t("controlReplay.optTwoHpActive"),
@@ -596,7 +598,7 @@ import { formatDate, formatNumber, formatTime, getIntlLocale, optionLabel, t } f
         verdict: t("controlReplay.optOneHpEnough"),
         summary: t("controlReplay.optOneHpEnoughCopy"),
         rows: [
-          { option: t("controlReplay.optTwoHp"), result: t("controlReplay.optNoLongerNeeded"), code: "less_power", detail: t("controlReplay.optTogetherTooMuch"), tone: "muted" },
+          ...(hasHp2 ? [{ option: t("controlReplay.optTwoHp"), result: t("controlReplay.optNoLongerNeeded"), code: "less_power", detail: t("controlReplay.optTogetherTooMuch"), tone: "muted" }] : []),
           { option: source, result: t("controlReplay.optStaysActive"), code: "less_power", detail: t("controlReplay.optOneHpCovers"), tone: "selected" },
         ],
       };
@@ -605,10 +607,10 @@ import { formatDate, formatNumber, formatTime, getIntlLocale, optionLabel, t } f
       return {
         title: t("controlReplay.optSystemChoice"),
         verdict: t("controlReplay.optStarted", { source }),
-        summary: t("controlReplay.optHpEqual"),
+        summary: t(hasHp2 ? "controlReplay.optHpEqual" : "controlReplay.evHpEqualCopy"),
         rows: [
-          { option: "HP1", result: source === "HP1" ? t("controlReplay.optChosen") : t("controlReplay.optNotNow"), code: "runtime_lead", detail: t("controlReplay.optFitsBalance"), tone: source === "HP1" ? "selected" : "muted" },
-          { option: "HP2", result: source === "HP2" ? t("controlReplay.optChosen") : t("controlReplay.optNotNow"), code: "runtime_lead", detail: t("controlReplay.optEqualLessGood"), tone: source === "HP2" ? "selected" : "muted" },
+          { option: "HP1", result: source === "HP1" ? t("controlReplay.optChosen") : t("controlReplay.optNotNow"), code: "runtime_lead", detail: t(hasHp2 ? "controlReplay.optFitsBalance" : "controlReplay.evHpEqualCopy"), tone: source === "HP1" ? "selected" : "muted" },
+          ...(hasHp2 ? [{ option: "HP2", result: source === "HP2" ? t("controlReplay.optChosen") : t("controlReplay.optNotNow"), code: "runtime_lead", detail: t("controlReplay.optEqualLessGood"), tone: source === "HP2" ? "selected" : "muted" }] : []),
         ],
       };
     }
@@ -670,7 +672,7 @@ import { formatDate, formatNumber, formatTime, getIntlLocale, optionLabel, t } f
         verdict: t("controlReplay.optBoilerSupports"),
         summary: t("controlReplay.optBoilerBase"),
         rows: [
-          { option: t("controlReplay.optOnlyHps"), result: t("controlReplay.optTooLittleReserve"), code: "better_heat", detail: t("controlReplay.optDemandHigh"), tone: "muted" },
+          { option: t(hasHp2 ? "controlReplay.optOnlyHps" : "controlReplay.optOneHp"), result: t("controlReplay.optTooLittleReserve"), code: "better_heat", detail: t("controlReplay.optDemandHigh"), tone: "muted" },
           { option: t("controlReplay.optBoiler"), result: t("controlReplay.optTempExtra"), code: "boiler_assist", detail: t("controlReplay.optBoilerExtra"), tone: "selected" },
           { option: t("controlReplay.optAfterPeak"), result: t("controlReplay.optBackToHp"), code: "less_power", detail: t("controlReplay.optHpTakeOver"), tone: "muted" },
         ],
@@ -1009,7 +1011,7 @@ import { formatDate, formatNumber, formatTime, getIntlLocale, optionLabel, t } f
       supplyTemp: formatControlReplayNumber("supplyTemp", 1, "°C", "—"),
       flow: formatControlReplayNumber("flowSelected", 0, "L/h", "—"),
       hp1Starts: getControlReplayCounterValue("hp1CompressorStarts24h", "—"),
-      hp2Starts: getControlReplayCounterValue("hp2CompressorStarts24h", hp2Panel ? "—" : t("controlReplay.cardNotApplicable")),
+      hp2Starts: hp2Panel ? getControlReplayCounterValue("hp2CompressorStarts24h", "—") : t("controlReplay.cardNotApplicable"),
       hp1Hours: formatControlReplayRuntimeHours("hp1RuntimeHours", "—"),
       hp2Hours: hp2Panel ? formatControlReplayRuntimeHours("hp2RuntimeHours", "—") : t("controlReplay.curNa"),
       cooling: coolingContext,
@@ -2964,6 +2966,7 @@ import { formatDate, formatNumber, formatTime, getIntlLocale, optionLabel, t } f
     const reason = getControlWorkingReasonMeta(current.primaryReason);
     const optimizer = getControlWorkingOptimizerModel({
       primaryReason: current.primaryReason,
+      hp2Available: current.hp2Available,
       source: current.hp1Running && current.hp2Running ? "HP1 + HP2" : current.hp1Running ? "HP1" : current.hp2Running ? "HP2" : t("controlReplay.statusNoSource"),
     });
     const isCoolingGuard = Boolean(current.coolingProtection);

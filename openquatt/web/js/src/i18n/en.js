@@ -2090,7 +2090,7 @@ export default {
     cm100StartCopy: "Start service mode before running a task.",
     calTitle: "Calibrate temperature sensors",
     calLabel: "Sensor calibration",
-    calSummary: "Run the circulation pump with the compressor off and determine offsets for HP1/HP2 water inlet/outlet and the active supply temperature source.",
+    calSummary: "Run the circulation pump with the compressor off and determine offsets for {heatPumps} water inlet/outlet and the active supply temperature source.",
     calCopy: "Expect about 3 to 5 minutes. First the water mixes for 3 minutes; then measurement stops once the sensors are stable enough.",
     calSubcopy: "The suggested values only become active when you apply them. The supply offset is stored per source and automatically restored on a later source switch; a CIC URL change does not remove it.",
     calRunning: "The pump is running and the firmware is waiting for stable temperature readings.",

@@ -2090,7 +2090,7 @@ export default {
     cm100StartCopy: "Start de service-stand voordat je een taak uitvoert.",
     calTitle: "Temperatuursensoren kalibreren",
     calLabel: "Sensor kalibratie",
-    calSummary: "Laat de waterpomp draaien zonder compressor en bepaal offsets voor HP1/HP2 water in/out en de actieve aanvoerbron.",
+    calSummary: "Laat de waterpomp draaien zonder compressor en bepaal offsets voor {heatPumps} water in/out en de actieve aanvoerbron.",
     calCopy: "Reken op ongeveer 3 tot 5 minuten. Eerst mengt het water 3 minuten; daarna stopt de meting zodra de sensoren stabiel genoeg zijn.",
     calSubcopy: "De voorgestelde waarden worden pas actief wanneer je ze toepast. De aanvoer-offset wordt per bron opgeslagen en bij een latere bronwissel automatisch teruggezet; een CIC-URL-wijziging verwijdert hem niet.",
     calRunning: "De pomp draait en de firmware wacht op een stabiel temperatuurbeeld.",

@@ -202,7 +202,7 @@ class Runtime {
       result.defrost = defrost;
       result.valve_defrost = valve_defrost;
       result.levels[0] = {true, true, true, 0.0f, 0.0f};
-      for (int level = 1; level <= oq_power_house_dispatch::kMaxLevel; ++level) {
+      for (int level = 1; level <= frequency.automatic_level_limit(hp1, 2); ++level) {
         const auto prediction = oq_perf::predict_candidate(frequency, frequency.performance_variant(hp1), hp1, level,
                                                            outside_c, supply_c, allow_low_supply_boundary_estimate);
         const bool allowed = prediction.frequency_policy_allowed;
@@ -211,7 +211,8 @@ class Runtime {
         if (valve_defrost && std::isfinite(thermal_w)) thermal_w *= defrost_factor;
         const bool thermal_valid = std::isfinite(thermal_w) && thermal_w >= 0.0f;
         const bool electrical_valid = std::isfinite(electrical_w) && electrical_w >= 0.0f;
-        result.levels[level] = {allowed, thermal_valid, electrical_valid, thermal_w, electrical_w};
+        result.levels[level] = {allowed,   thermal_valid, electrical_valid,
+                                thermal_w, electrical_w,  static_cast<uint8_t>(prediction.runtime_frequency_hz)};
         bool& model_available = hp1 ? hp1_model_available : hp2_model_available;
         bool& runnable_candidate = hp1 ? hp1_runnable_candidate : hp2_runnable_candidate;
         model_available |= prediction.runtime_frequency_known && prediction.performance.available;
