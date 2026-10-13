@@ -763,9 +763,11 @@ class Runtime {
 
   bool defrost_safety_stop_(bool is_hp1) const {
     const uint8_t hp = is_hp1 ? 1U : 2U;
+    const auto incident = id(oq_incident_manager).get_outputs(hp);
     const auto& cycle = (is_hp1 ? id(hp1_odu_defrost) : OQ_ACTUATOR_SECONDARY_ID(odu_defrost)).cycle;
-    return id(oq_water_temp_hard_trip_active) || id(oq_lowflow_fault_active) ||
-           id(oq_incident_manager).get_outputs(hp).must_stop || cycle.telemetry_fault(millis());
+    return id(oq_water_temp_hard_trip_active) || id(oq_lowflow_fault_active) || incident.must_stop ||
+           incident.run_state == oq_incidents::RunState::STOPPING ||
+           incident.run_state == oq_incidents::RunState::STOP_UNCONFIRMED || cycle.telemetry_fault(millis());
   }
   void update_defrost_(bool is_hp1, uint32_t now) {
     auto* service = is_hp1 ? &id(hp1_odu_defrost) : &OQ_ACTUATOR_SECONDARY_ID(odu_defrost);

@@ -655,8 +655,10 @@ select:
       "Heating": 2
     write_lambda: |-
       // Final gate also covers supervisory safety's direct select writes.
+      const auto incident = id(oq_incident_manager).get_outputs(${hp_index});
       const bool hard_stop = id(oq_water_temp_hard_trip_active) || id(oq_lowflow_fault_active) ||
-          id(oq_incident_manager).get_outputs(${hp_index}).must_stop ||
+          incident.must_stop || incident.run_state == oq_incidents::RunState::STOPPING ||
+          incident.run_state == oq_incidents::RunState::STOP_UNCONFIRMED ||
           id(${hp_id}_odu_defrost)->cycle.telemetry_fault(millis());
       if (!id(${hp_id}_odu_defrost)->normal_write_allowed(value, hard_stop)) return {};
       return value;
@@ -671,8 +673,10 @@ select:
     optimistic: true
     write_lambda: |-
       // Freeze normal compressor commands during ODU-owned defrost; hard stops retain priority.
+      const auto incident = id(oq_incident_manager).get_outputs(${hp_index});
       const bool hard_stop = id(oq_water_temp_hard_trip_active) || id(oq_lowflow_fault_active) ||
-          id(oq_incident_manager).get_outputs(${hp_index}).must_stop ||
+          incident.must_stop || incident.run_state == oq_incidents::RunState::STOPPING ||
+          incident.run_state == oq_incidents::RunState::STOP_UNCONFIRMED ||
           id(${hp_id}_odu_defrost)->cycle.telemetry_fault(millis());
       if (!id(${hp_id}_odu_defrost)->normal_write_allowed(value, hard_stop)) return {};
       return value;
