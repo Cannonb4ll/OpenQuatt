@@ -38,7 +38,6 @@ import { render } from "../core/render-scheduler.js";
       state.appView,
       state.complete ? "complete" : "incomplete",
       state.overviewThemePreference,
-      state.overviewTheme,
       state.hpVisualMode,
       getEntitySignatureFragment("installationTopology"),
       getEntitySignatureFragment("hardwareProfileText"),

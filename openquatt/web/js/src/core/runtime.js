@@ -1,5 +1,6 @@
 import { FAST_POLL_INTERVAL_MS, HIDDEN_POLL_INTERVAL_MS, OFFICIAL_ESPHOME_UI_URL, POLL_JITTER_MAX_MS, POLL_JITTER_MIN_MS, SETTINGS_GROUP_IDS, SETTINGS_GROUPS } from "./config.js";
 import { setEntityPollingControls } from "./entity-polling-controls.js";
+import { syncDocumentTheme } from "./app-shared.js";
 import { getColorSchemeDarkMedia, getReducedMotionMedia, resolveOverviewTheme, state } from "./state.js";
 export { DEFAULT_TREND_WINDOW_HOURS, TREND_WINDOW_HOURS_OPTIONS, state } from "./state.js";
 import { handleChange, handleClick, handleFocusChange, handleInput, handleKeyDown, handlePointerDown, handlePointerMove, handlePointerUp, handleSettingsInteractionEnd, handleSettingsInteractionStart, handleWheel } from "./event-handlers.js";
@@ -112,7 +113,7 @@ import { t } from "../i18n/index.js";
       return;
     }
     state.overviewTheme = theme;
-    render();
+    syncDocumentTheme();
   }
 
   export function bindColorSchemePreference() {
@@ -126,6 +127,9 @@ import { t } from "../i18n/index.js";
       media.addEventListener("change", handleColorSchemePreferenceChange);
     } else if (typeof media.addListener === "function") {
       media.addListener(handleColorSchemePreferenceChange);
+    }
+    if (state.overviewThemePreference === "auto") {
+      state.overviewTheme = media.matches ? "dark" : "light";
     }
   }
 

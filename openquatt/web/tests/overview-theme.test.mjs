@@ -31,7 +31,7 @@ globalThis.window = {
 const { getStoredOverviewThemePreference, resolveOverviewTheme, state } = await import("../js/src/core/state.js");
 const { bindColorSchemePreference, setOverviewTheme } = await import("../js/src/core/runtime.js");
 const { setRenderCallback } = await import("../js/src/core/render-scheduler.js");
-const { renderHeaderStatus } = await import("../js/src/features/header-status.js");
+const { getHeaderRenderSignature, renderHeaderStatus } = await import("../js/src/features/header-status.js");
 
 test("theme preference defaults to automatic and keeps stored light/dark choices", () => {
   storage.clear();
@@ -64,10 +64,10 @@ test("automatic theme follows the device color scheme and explicit choices ignor
 
   colorSchemeMedia.emit(false);
   assert.equal(state.overviewTheme, "light");
-  assert.equal(renders, 1);
+  assert.equal(renders, 0);
 
   colorSchemeMedia.emit(false);
-  assert.equal(renders, 1);
+  assert.equal(renders, 0);
 
   setOverviewTheme("dark");
   assert.equal(storage.get("oq-overview-theme"), "dark");
@@ -75,7 +75,7 @@ test("automatic theme follows the device color scheme and explicit choices ignor
   colorSchemeMedia.emit(false);
   assert.equal(state.overviewTheme, "dark");
   assert.equal(state.overviewThemePreference, "dark");
-  assert.equal(renders, 1);
+  assert.equal(renders, 0);
 });
 
 test("interface panel offers automatic, light and dark theme choices", () => {
@@ -93,4 +93,90 @@ test("interface panel offers automatic, light and dark theme choices", () => {
     { theme: "dark", active: false },
   ]);
   assert.doesNotMatch(html, /toggle-overview-theme/);
+});
+
+
+function createThemeElement(classes = []) {
+  const tokens = new Set(classes);
+  return {
+    classList: {
+      add: (...values) => values.forEach((value) => tokens.add(value)),
+      remove: (...values) => values.forEach((value) => tokens.delete(value)),
+      contains: (value) => tokens.has(value),
+      toggle: (value, enabled) => enabled ? tokens.add(value) : tokens.delete(value),
+    },
+  };
+}
+
+test("binding automatic theme reconciles a system change since initial state loading", () => {
+  colorSchemeMedia.matches = false;
+  setOverviewTheme("auto");
+  state.overviewThemeMedia = null;
+  colorSchemeMedia.matches = true;
+  bindColorSchemePreference();
+  assert.equal(state.overviewTheme, "dark");
+
+  setOverviewTheme("light");
+  state.overviewThemeMedia = null;
+  bindColorSchemePreference();
+  assert.equal(state.overviewTheme, "light");
+});
+
+test("automatic theme patches all existing surfaces without replacing active controls", (t) => {
+  const previousDocument = globalThis.document;
+  const previousRoot = state.root;
+  const shell = createThemeElement();
+  const boards = [createThemeElement(["oq-overview-board--light"]), createThemeElement(["oq-overview-board--light"])];
+  const backdrop = createThemeElement();
+  const surfaces = new Map([
+    [".oq-helper-shell", [shell]],
+    [".oq-overview-board", boards],
+    [".oq-helper-modal-backdrop", [backdrop]],
+  ]);
+  const controls = ["SELECT", "INPUT", "TEXTAREA", "BUTTON"].map((tagName) => ({ tagName, value: "draft" }));
+  const root = {
+    scrollTop: 123,
+    querySelectorAll: (selector) => surfaces.get(selector) || [],
+    set innerHTML(_value) { assert.fail("Theme change must not replace the DOM"); },
+  };
+  globalThis.document = { documentElement: createThemeElement(), body: createThemeElement() };
+  state.root = root;
+  state.nativeOpen = false;
+  let renders = 0;
+  setRenderCallback(() => { renders += 1; });
+  t.after(() => {
+    globalThis.document = previousDocument;
+    state.root = previousRoot;
+    setRenderCallback(null);
+  });
+
+  colorSchemeMedia.matches = false;
+  setOverviewTheme("auto");
+  const headerSignature = getHeaderRenderSignature();
+  for (const control of controls) {
+    document.activeElement = control;
+    colorSchemeMedia.emit(true);
+    assert.equal(state.overviewTheme, "dark");
+    assert.equal(shell.classList.contains("oq-helper-shell--dark"), true);
+    assert.equal(backdrop.classList.contains("oq-helper-modal-backdrop--dark"), true);
+    assert.equal(document.body.classList.contains("oq-page-dark"), true);
+    for (const board of boards) {
+      assert.equal(board.classList.contains("oq-overview-board--dark"), true);
+      assert.equal(board.classList.contains("oq-overview-board--light"), false);
+    }
+    assert.equal(document.activeElement, control);
+    assert.equal(control.value, "draft");
+    assert.equal(root.scrollTop, 123);
+    assert.equal(getHeaderRenderSignature(), headerSignature);
+
+    colorSchemeMedia.emit(false);
+    assert.equal(shell.classList.contains("oq-helper-shell--dark"), false);
+    assert.equal(backdrop.classList.contains("oq-helper-modal-backdrop--dark"), false);
+    assert.equal(document.documentElement.classList.contains("oq-page-light"), true);
+    for (const board of boards) {
+      assert.equal(board.classList.contains("oq-overview-board--dark"), false);
+      assert.equal(board.classList.contains("oq-overview-board--light"), true);
+    }
+  }
+  assert.equal(renders, 0);
 });
