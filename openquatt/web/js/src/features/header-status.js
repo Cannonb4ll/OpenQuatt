@@ -37,6 +37,7 @@ import { render } from "../core/render-scheduler.js";
       state.nativeOpen ? "native" : "app",
       state.appView,
       state.complete ? "complete" : "incomplete",
+      state.overviewThemePreference,
       state.overviewTheme,
       state.hpVisualMode,
       getEntitySignatureFragment("installationTopology"),
@@ -387,10 +388,10 @@ import { render } from "../core/render-scheduler.js";
         </div>
         <div class="oq-helper-hub-block">
           <p class="oq-helper-hub-kicker">${escapeHtml(t("header.appearanceSection"))}</p>
-          <div class="oq-helper-hub-actions">
-            <button class="oq-helper-button oq-helper-button--ghost oq-helper-hub-action" type="button" data-oq-action="toggle-overview-theme">
-              ${state.overviewTheme === "light" ? escapeHtml(t("header.darkMode")) : escapeHtml(t("header.lightMode"))}
-            </button>
+          <div class="oq-helper-hub-switches oq-helper-hub-switches--theme" role="group" aria-label="${escapeHtml(t("header.themeLabel"))}">
+            <button class="oq-helper-hub-chip${state.overviewThemePreference === "auto" ? " is-active" : ""}" type="button" data-oq-action="select-overview-theme" data-overview-theme="auto" title="${escapeHtml(t("header.themeAutoHint"))}">${escapeHtml(t("header.themeAuto"))}</button>
+            <button class="oq-helper-hub-chip${state.overviewThemePreference === "light" ? " is-active" : ""}" type="button" data-oq-action="select-overview-theme" data-overview-theme="light">${escapeHtml(t("header.themeLight"))}</button>
+            <button class="oq-helper-hub-chip${state.overviewThemePreference === "dark" ? " is-active" : ""}" type="button" data-oq-action="select-overview-theme" data-overview-theme="dark">${escapeHtml(t("header.themeDark"))}</button>
           </div>
         </div>
         <div class="oq-helper-hub-block">
